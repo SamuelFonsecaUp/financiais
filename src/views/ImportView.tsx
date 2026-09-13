@@ -546,6 +546,7 @@ const ImportViewContent: React.FC = () => {
         isCreditCard: destType === 'card',
         items: selected,
         saveRules: saveRulesChecked,
+        statementId: savedStatementId,
       });
 
       let msg = `${res.count} lançamentos importados com sucesso!`;

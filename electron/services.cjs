@@ -670,6 +670,11 @@ class FinancialService {
       params.push(`%${filters.tag.trim()}%`);
     }
 
+    if (filters.statementId) {
+      whereClauses.push(`t.statement_id = ?`);
+      params.push(filters.statementId);
+    }
+
     const where = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
     const query = `
@@ -683,12 +688,15 @@ class FinancialService {
         c.color as category_color,
         c.icon as category_icon,
         cc.name as credit_card_name,
-        cc.color as credit_card_color
+        cc.color as credit_card_color,
+        s.original_name as statement_original_name,
+        s.file_name as statement_file_name
       FROM transactions t
       LEFT JOIN accounts a ON t.account_id = a.id
       LEFT JOIN accounts da ON t.destination_account_id = da.id
       LEFT JOIN categories c ON t.category_id = c.id
       LEFT JOIN credit_cards cc ON t.credit_card_id = cc.id
+      LEFT JOIN imported_statements s ON t.statement_id = s.id
       ${where}
       ORDER BY t.transaction_date DESC, t.created_at DESC
       ${filters.limit ? `LIMIT ${parseInt(filters.limit, 10)}` : ''}
@@ -710,6 +718,9 @@ class FinancialService {
       creditCardId: r.credit_card_id,
       creditCardName: r.credit_card_name,
       creditCardColor: r.credit_card_color,
+      statementId: r.statement_id,
+      statementOriginalName: r.statement_original_name,
+      statementFileName: r.statement_file_name,
       type: r.type,
       description: r.description,
       amount: r.amount,
@@ -2032,7 +2043,7 @@ class FinancialService {
     };
   }
 
-  batchImportTransactions({ accountId, isCreditCard = false, items, saveRules = true }) {
+  batchImportTransactions({ accountId, isCreditCard = false, items, saveRules = true, statementId = null }) {
     if (!accountId) throw new Error('Conta ou cartão de destino é obrigatório.');
     if (!items || items.length === 0) throw new Error('Nenhum lançamento selecionado para importação.');
 
@@ -2045,9 +2056,9 @@ class FinancialService {
     const insertStmt = this.db.prepare(`
       INSERT INTO transactions (
         id, account_id, credit_card_id, category_id, type, description, amount, 
-        transaction_date, invoice_month, status, tags, fit_id, origin, is_demo, created_at, updated_at
+        transaction_date, invoice_month, status, tags, fit_id, origin, statement_id, is_demo, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'importado', ?, ?, 0, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'importado', ?, ?, ?, 0, ?, ?)
     `);
 
     const now = new Date().toISOString();
@@ -2076,6 +2087,7 @@ class FinancialService {
           invoiceMonth,
           item.fitId || null,
           origin,
+          statementId || null,
           now,
           now
         );
@@ -2103,10 +2115,64 @@ class FinancialService {
           }
         }
       }
+
+      if (statementId) {
+        this.updateImportedStatementStats(statementId, {
+          itemsCount: importedCount,
+          accountId: isCreditCard ? null : accountId,
+          cardId: isCreditCard ? accountId : null,
+        });
+      }
     });
 
     runBatch();
     return { success: true, count: importedCount, learnedRulesCount: learnedPatterns.size };
+  }
+
+  reassignStatementAccount({ statementId, targetAccountId, targetType = 'account' }) {
+    if (!statementId) throw new Error('Identificador do extrato é obrigatório.');
+    if (!targetAccountId) throw new Error('Conta ou cartão de destino é obrigatório.');
+
+    const statement = this.db.prepare(`SELECT * FROM imported_statements WHERE id = ?`).get(statementId);
+    if (!statement) throw new Error('Extrato importado não encontrado.');
+
+    const txRows = this.db.prepare(`SELECT id FROM transactions WHERE statement_id = ?`).all(statementId);
+    const txIds = txRows.map(r => r.id);
+
+    if (txIds.length > 0) {
+      this.batchMoveTransactions({
+        transactionIds: txIds,
+        targetAccountId,
+        targetType,
+      });
+    }
+
+    if (targetType === 'card') {
+      this.db.prepare(`UPDATE imported_statements SET card_id = ?, account_id = NULL WHERE id = ?`).run(targetAccountId, statementId);
+    } else {
+      this.db.prepare(`UPDATE imported_statements SET account_id = ?, card_id = NULL WHERE id = ?`).run(targetAccountId, statementId);
+    }
+
+    return {
+      success: true,
+      updatedCount: txIds.length,
+      statementId,
+    };
+  }
+
+  deleteStatementTransactions(statementId) {
+    if (!statementId) throw new Error('Identificador do extrato é obrigatório.');
+
+    const txRows = this.db.prepare(`SELECT id FROM transactions WHERE statement_id = ?`).all(statementId);
+    const count = txRows.length;
+
+    this.db.prepare(`DELETE FROM transactions WHERE statement_id = ?`).run(statementId);
+    this.db.prepare(`UPDATE imported_statements SET items_count = 0 WHERE id = ?`).run(statementId);
+
+    return {
+      success: true,
+      deletedCount: count,
+    };
   }
 
   // --- BANK STATEMENT VAULT (OFX/CSV ARCHIVE) ---

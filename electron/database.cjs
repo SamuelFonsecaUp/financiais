@@ -110,6 +110,7 @@ function initDatabase(customPath = null) {
       tags TEXT,
       fit_id TEXT,
       origin TEXT,
+      statement_id TEXT REFERENCES imported_statements(id) ON DELETE SET NULL,
       created_at TEXT,
       updated_at TEXT
     );
@@ -198,6 +199,7 @@ function initDatabase(customPath = null) {
     `ALTER TABLE recurring_rules ADD COLUMN billing_day INTEGER`,
     `ALTER TABLE recurring_rules ADD COLUMN auto_generate INTEGER DEFAULT 1`,
     `ALTER TABLE recurring_rules ADD COLUMN notes TEXT`,
+    `ALTER TABLE transactions ADD COLUMN statement_id TEXT`,
   ];
   for (const m of migrations) {
     try { db.exec(m); } catch (e) {}
@@ -214,6 +216,7 @@ function initDatabase(customPath = null) {
     `CREATE INDEX IF NOT EXISTS idx_trans_status ON transactions(status)`,
     `CREATE INDEX IF NOT EXISTS idx_trans_installment ON transactions(installment_id)`,
     `CREATE INDEX IF NOT EXISTS idx_trans_fit_id ON transactions(fit_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_trans_statement ON transactions(statement_id)`,
     `CREATE INDEX IF NOT EXISTS idx_budgets_cat ON category_budgets(category_id)`,
     `CREATE INDEX IF NOT EXISTS idx_notif_read ON notifications(read)`,
     `CREATE INDEX IF NOT EXISTS idx_rules_pattern ON import_rules(pattern)`,

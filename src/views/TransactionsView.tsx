@@ -19,8 +19,7 @@ import {
   FolderInput,
   CheckCircle2,
 } from 'lucide-react';
-import { useFinancial } from '../context/FinancialContext';
-import { Transaction } from '../types';
+import { Transaction, ImportedStatement } from '../types';
 import { formatCurrency, formatDate, getCurrentMonthString } from '../utils/formatters';
 import { EmptyState } from '../components/EmptyState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -54,6 +53,12 @@ export const TransactionsView: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState('');
   const [selectedType, setSelectedType] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('');
+  const [selectedStatement, setSelectedStatement] = useState('');
+
+  // Statements vault info
+  const [statements, setStatements] = useState<ImportedStatement[]>([]);
+  const [statementMoveModalOpen, setStatementMoveModalOpen] = useState(false);
+  const [statementDeleteConfirmOpen, setStatementDeleteConfirmOpen] = useState(false);
 
   // Delete modal state
   const [deleteCandidate, setDeleteCandidate] = useState<Transaction | null>(null);
@@ -138,6 +143,68 @@ export const TransactionsView: React.FC = () => {
     }
   };
 
+  const loadStatements = async () => {
+    if (window.electronAPI?.getSavedStatements) {
+      try {
+        const list = await window.electronAPI.getSavedStatements();
+        setStatements(list);
+      } catch (e) {}
+    }
+  };
+
+  useEffect(() => {
+    loadStatements();
+  }, []);
+
+  const handleReassignStatement = async () => {
+    if (!selectedStatement || !batchTargetId) return;
+    setIsBatchProcessing(true);
+    try {
+      const res = await window.electronAPI.reassignStatementAccount({
+        statementId: selectedStatement,
+        targetAccountId: batchTargetId,
+        targetType: batchTargetType,
+      });
+
+      const targetName = batchTargetType === 'card'
+        ? creditCards.find(c => c.id === batchTargetId)?.name
+        : accounts.find(a => a.id === batchTargetId)?.name;
+
+      showToast(`Importação alterada! ${res.updatedCount} lançamentos movidos para "${targetName}".`, 'success');
+      setStatementMoveModalOpen(false);
+      await refreshAll();
+      loadTransactions();
+      loadStatements();
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao reatribuir importação', 'error');
+    } finally {
+      setIsBatchProcessing(false);
+    }
+  };
+
+  const handleDeleteStatementTransactions = async () => {
+    if (!selectedStatement) return;
+    setIsBatchProcessing(true);
+    try {
+      const res = await window.electronAPI.deleteStatementTransactions(selectedStatement);
+      showToast(`Importação desfeita com sucesso! ${res.deletedCount} lançamentos foram excluídos.`, 'success');
+      setStatementDeleteConfirmOpen(false);
+      setSelectedStatement('');
+      await refreshAll();
+      loadTransactions();
+      loadStatements();
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao desfazer importação', 'error');
+    } finally {
+      setIsBatchProcessing(false);
+    }
+  };
+
+  const activeStatementInfo = useMemo(() => {
+    if (!selectedStatement) return null;
+    return statements.find(s => s.id === selectedStatement) || null;
+  }, [selectedStatement, statements]);
+
   // Load transactions based on filters
   const loadTransactions = async () => {
     setLoading(true);
@@ -176,6 +243,7 @@ export const TransactionsView: React.FC = () => {
         status: selectedStatus || undefined,
         search: search || undefined,
         tag: selectedTag || undefined,
+        statementId: selectedStatement || undefined,
       };
 
       const list = await window.electronAPI.getTransactions(filters);
@@ -201,6 +269,7 @@ export const TransactionsView: React.FC = () => {
     selectedStatus,
     search,
     selectedTag,
+    selectedStatement,
   ]);
 
   const handleDuplicate = async (tx: Transaction) => {
@@ -253,6 +322,7 @@ export const TransactionsView: React.FC = () => {
     setSelectedCategory('');
     setSelectedType('');
     setSelectedStatus('');
+    setSelectedStatement('');
   };
 
   // Aggregated totals for filtered view
@@ -275,7 +345,7 @@ export const TransactionsView: React.FC = () => {
   }, [transactions]);
 
   const hasActiveFilters = Boolean(
-    search || selectedTag || selectedAccount || selectedCard || selectedCategory || selectedType || selectedStatus || period !== 'current_month'
+    search || selectedTag || selectedAccount || selectedCard || selectedCategory || selectedType || selectedStatus || selectedStatement || period !== 'current_month'
   );
 
   return (
@@ -477,7 +547,87 @@ export const TransactionsView: React.FC = () => {
               )}
             </div>
           </div>
+
+          {/* Statement Filter if statements exist */}
+          {statements.length > 0 && (
+            <div className="pt-2 border-t border-slate-800/60 flex items-center gap-3">
+              <span className="text-[11px] text-slate-400 font-medium flex items-center gap-1.5 shrink-0">
+                <FileSpreadsheet className="w-3.5 h-3.5 text-brand-400" />
+                Extrato Importado:
+              </span>
+              <div className="flex-1 max-w-md">
+                <CustomSelect
+                  size="sm"
+                  value={selectedStatement}
+                  onChange={(val) => {
+                    setSelectedStatement(val);
+                    if (val) setPeriod('all');
+                  }}
+                  options={[
+                    { value: '', label: 'Todos os Lançamentos (Sem filtro de extrato)' },
+                    ...statements.map(s => ({
+                      value: s.id,
+                      label: `${s.originalName} (${s.itemsCount} itens)`,
+                      subtitle: s.accountName ? `Conta: ${s.accountName}` : s.cardName ? `Cartão: ${s.cardName}` : undefined,
+                    })),
+                  ]}
+                  placeholder="Filtrar por extrato importado..."
+                />
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* Active Statement Banner */}
+        {activeStatementInfo && (
+          <div className="p-4 bg-gradient-to-r from-slate-900 via-slate-900 to-slate-950 border border-brand-500/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-lg animate-fade-in">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-brand-500/20 text-brand-400 flex items-center justify-center shrink-0">
+                <FileSpreadsheet className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-bold text-white">
+                    {activeStatementInfo.originalName}
+                  </span>
+                  <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-slate-800 text-brand-400 border border-slate-700">
+                    {activeStatementInfo.fileType}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Extrato com <strong>{activeStatementInfo.itemsCount} lançamentos</strong> vinculados à conta{' '}
+                  <strong className="text-white">{activeStatementInfo.accountName || activeStatementInfo.cardName || 'Não vinculada'}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setStatementMoveModalOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold transition-all shadow-md shadow-brand-600/20 whitespace-nowrap"
+              >
+                <FolderInput className="w-3.5 h-3.5" />
+                Mudar Conta Desta Importação
+              </button>
+
+              <button
+                onClick={() => setStatementDeleteConfirmOpen(true)}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 text-xs font-semibold transition-all whitespace-nowrap"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Desfazer Importação
+              </button>
+
+              <button
+                onClick={() => setSelectedStatement('')}
+                className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                title="Fechar visualização deste extrato"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Transactions Table */}
         <div className="rounded-2xl bg-slate-900/60 border border-slate-800/80 overflow-hidden shadow-sm">
@@ -585,6 +735,24 @@ export const TransactionsView: React.FC = () => {
                                       #{tag.trim().replace(/^#/, '')}
                                     </span>
                                   ))}
+                                </div>
+                              )}
+
+                              {tx.statementOriginalName && (
+                                <div className="mt-1">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setSelectedStatement(tx.statementId || '');
+                                      setPeriod('all');
+                                    }}
+                                    title="Clique para filtrar lançamentos deste extrato e alterar sua conta"
+                                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 transition-colors"
+                                  >
+                                    <FileSpreadsheet className="w-3 h-3 shrink-0" />
+                                    <span className="truncate max-w-[180px]">{tx.statementOriginalName}</span>
+                                  </button>
                                 </div>
                               )}
                             </div>
@@ -888,6 +1056,116 @@ export const TransactionsView: React.FC = () => {
         title="Excluir Lançamentos em Lote"
         message={`Deseja realmente excluir todos os ${selectedIds.length} lançamentos selecionados? Essa ação não poderá ser desfeita.`}
         confirmLabel="Sim, excluir todos"
+        cancelLabel="Cancelar"
+      />
+
+      {/* Statement Move Modal */}
+      <Modal
+        isOpen={statementMoveModalOpen}
+        onClose={() => setStatementMoveModalOpen(false)}
+        title={`Mudar Conta do Extrato: ${activeStatementInfo?.originalName || ''}`}
+        subtitle="Mova todos os lançamentos que vieram desta importação para a conta correta"
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center gap-4 text-xs font-medium text-slate-300">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="statementBatchTargetType"
+                checked={batchTargetType === 'account'}
+                onChange={() => {
+                  setBatchTargetType('account');
+                  const def = accounts.find(a => a.active) || accounts[0];
+                  setBatchTargetId(def?.id || '');
+                }}
+                className="text-brand-600 focus:ring-0"
+              />
+              <span>Conta Bancária / Carteira</span>
+            </label>
+
+            {creditCards.length > 0 && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="statementBatchTargetType"
+                  checked={batchTargetType === 'card'}
+                  onChange={() => {
+                    setBatchTargetType('card');
+                    const def = creditCards.find(c => c.active) || creditCards[0];
+                    setBatchTargetId(def?.id || '');
+                  }}
+                  className="text-brand-600 focus:ring-0"
+                />
+                <span>Cartão de Crédito</span>
+              </label>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              {batchTargetType === 'account' ? 'Selecione a Nova Conta Destino:' : 'Selecione o Novo Cartão Destino:'}
+            </label>
+            {batchTargetType === 'account' ? (
+              <CustomSelect
+                value={batchTargetId}
+                onChange={(val) => setBatchTargetId(val)}
+                options={accounts.map(a => ({
+                  value: a.id,
+                  label: a.name,
+                  subtitle: formatCurrency(a.currentBalance),
+                  icon: Landmark,
+                }))}
+                placeholder="Selecione a conta..."
+              />
+            ) : (
+              <CustomSelect
+                value={batchTargetId}
+                onChange={(val) => setBatchTargetId(val)}
+                options={creditCards.map(c => ({
+                  value: c.id,
+                  label: c.name,
+                  subtitle: `Disp: ${formatCurrency(c.availableLimit)}`,
+                  icon: CardIcon,
+                }))}
+                placeholder="Selecione o cartão..."
+              />
+            )}
+          </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+            Todos os <strong>{activeStatementInfo?.itemsCount || 0} lançamentos</strong> pertencentes a este extrato serão movidos para esta nova conta/cartão e os saldos serão atualizados automaticamente.
+          </p>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setStatementMoveModalOpen(false)}
+              className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleReassignStatement}
+              disabled={isBatchProcessing || !batchTargetId}
+              className="px-5 py-2.5 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:pointer-events-none text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-brand-600/20"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              {isBatchProcessing ? 'Movendo...' : 'Confirmar e Mudar Conta do Extrato'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Statement Delete Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={statementDeleteConfirmOpen}
+        onClose={() => setStatementDeleteConfirmOpen(false)}
+        onConfirm={handleDeleteStatementTransactions}
+        title="Desfazer Importação do Extrato"
+        message={`Deseja realmente excluir todos os ${activeStatementInfo?.itemsCount || 0} lançamentos importados do arquivo "${activeStatementInfo?.originalName}"? Essa ação removerá os lançamentos da conta e ajustará o saldo automaticamente.`}
+        confirmLabel="Sim, desfazer importação"
         cancelLabel="Cancelar"
       />
     </div>

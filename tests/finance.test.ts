@@ -462,4 +462,78 @@ describe('Financial Rules and Core Logic', () => {
     expect(service.getAccountById(accA.id).currentBalance).toBe(50000);
     expect(service.getAccountById(accB.id).currentBalance).toBe(20000);
   });
+
+  it('tracks imported statements and allows reassigning destination account or deleting statement transactions', () => {
+    const itau = service.createAccount({ name: 'Itaú Corrente', initialBalance: 100000 });
+    const bradesco = service.createAccount({ name: 'Bradesco Corrente', initialBalance: 50000 });
+
+    // 1. Save statement record
+    const statement = service.saveImportedStatement({
+      originalName: 'extrato_setembro.ofx',
+      fileType: 'ofx',
+      content: 'OFXHEADER:100\n<OFX>fake content</OFX>',
+      accountId: itau.id,
+      itemsCount: 2,
+    });
+    expect(statement.id).toBeDefined();
+
+    // 2. Batch import transactions attached to this statement
+    const importResult = service.batchImportTransactions({
+      accountId: itau.id,
+      isCreditCard: false,
+      items: [
+        {
+          type: 'expense',
+          description: 'Compra Mercado',
+          amount: 20000,
+          transactionDate: '2026-09-02',
+          fitId: 'FITID-001',
+        },
+        {
+          type: 'income',
+          description: 'Recebimento Pix',
+          amount: 30000,
+          transactionDate: '2026-09-03',
+          fitId: 'FITID-002',
+        },
+      ],
+      statementId: statement.id,
+    });
+
+    expect(importResult.count).toBe(2);
+
+    // Initial check: Itaú balance = 100000 - 20000 + 30000 = 110000
+    expect(service.getAccountById(itau.id).currentBalance).toBe(110000);
+    expect(service.getAccountById(bradesco.id).currentBalance).toBe(50000);
+
+    // 3. Verify getTransactions returns statement info
+    const statementTxs = service.getTransactions({ statementId: statement.id });
+    expect(statementTxs.length).toBe(2);
+    expect(statementTxs[0].statementOriginalName).toBe('extrato_setembro.ofx');
+
+    // 4. Reassign statement from Itaú to Bradesco
+    const reassignRes = service.reassignStatementAccount({
+      statementId: statement.id,
+      targetAccountId: bradesco.id,
+      targetType: 'account',
+    });
+    expect(reassignRes.success).toBe(true);
+    expect(reassignRes.updatedCount).toBe(2);
+
+    // After reassign:
+    // Itaú balance back to initial: 100000
+    // Bradesco balance: 50000 - 20000 + 30000 = 60000
+    expect(service.getAccountById(itau.id).currentBalance).toBe(100000);
+    expect(service.getAccountById(bradesco.id).currentBalance).toBe(60000);
+
+    // 5. Delete statement transactions (undo import)
+    const deleteRes = service.deleteStatementTransactions(statement.id);
+    expect(deleteRes.success).toBe(true);
+    expect(deleteRes.deletedCount).toBe(2);
+
+    // After deletion:
+    // Bradesco balance back to initial: 50000
+    expect(service.getAccountById(bradesco.id).currentBalance).toBe(50000);
+    expect(service.getTransactions({ statementId: statement.id }).length).toBe(0);
+  });
 });

@@ -71,6 +71,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   parseCSV: (content, customMapping) => ipcRenderer.invoke('banking:parseCSV', content, customMapping),
   reconcileImport: (data) => ipcRenderer.invoke('banking:reconcile', data),
   batchImportTransactions: (data) => ipcRenderer.invoke('banking:batchImport', data),
+  reassignStatementAccount: (data) => ipcRenderer.invoke('banking:reassignStatementAccount', data),
+  deleteStatementTransactions: (statementId) => ipcRenderer.invoke('banking:deleteStatementTransactions', statementId),
   getSavedStatements: () => ipcRenderer.invoke('banking:getSavedStatements'),
   openStatementsFolder: () => ipcRenderer.invoke('banking:openStatementsFolder'),
   updateStatementStats: (id, data) => ipcRenderer.invoke('banking:updateStatementStats', id, data),

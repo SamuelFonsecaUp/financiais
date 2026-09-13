@@ -97,6 +97,9 @@ export interface Transaction {
   status: TransactionStatus;
   notes?: string;
   tags?: string;
+  statementId?: string;
+  statementOriginalName?: string;
+  statementFileName?: string;
   recurringId?: string;
   installmentId?: string;
   installmentNumber?: number;
@@ -496,7 +499,9 @@ export interface ElectronAPI {
   parseOFX: (content: string) => Promise<ImportReconciledItem[]>;
   parseCSV: (content: string, customMapping?: CsvColumnMapping) => Promise<ParsedCsvResult>;
   reconcileImport: (data: { accountId: string; isCreditCard?: boolean; items: any[] }) => Promise<ReconciledImportResult>;
-  batchImportTransactions: (data: { accountId: string; isCreditCard?: boolean; items: any[]; saveRules?: boolean }) => Promise<{ success: boolean; count: number; learnedRulesCount?: number }>;
+  batchImportTransactions: (data: { accountId: string; isCreditCard?: boolean; items: any[]; saveRules?: boolean; statementId?: string | null }) => Promise<{ success: boolean; count: number; learnedRulesCount?: number }>;
+  reassignStatementAccount: (data: { statementId: string; targetAccountId: string; targetType?: 'account' | 'card' }) => Promise<{ success: boolean; updatedCount: number; statementId: string }>;
+  deleteStatementTransactions: (statementId: string) => Promise<{ success: boolean; deletedCount: number }>;
   getSavedStatements: () => Promise<ImportedStatement[]>;
   openStatementsFolder: () => Promise<string>;
   updateStatementStats: (id: string, data: { itemsCount?: number; accountId?: string; cardId?: string }) => Promise<void>;

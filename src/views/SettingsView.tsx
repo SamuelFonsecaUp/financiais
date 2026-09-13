@@ -20,15 +20,22 @@ import {
   FileText,
   ShieldCheck,
   ExternalLink,
+  FolderInput,
+  Trash2,
+  Landmark,
+  CreditCard as CardIcon,
+  CheckCircle2,
 } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
 import { Modal } from '../components/Modal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
+import { CustomSelect } from '../components/CustomSelect';
 import { ImportRulesModal } from './ImportRulesModal';
 import { ImportedStatement } from '../types';
+import { formatCurrency } from '../utils/formatters';
 
 export const SettingsView: React.FC = () => {
-  const { settings, refreshAll, showToast, setCurrentView } = useFinancial();
+  const { settings, accounts, creditCards, refreshAll, showToast, setCurrentView } = useFinancial();
 
   const [userName, setUserName] = useState(settings?.userName || '');
   const [theme, setTheme] = useState<'dark' | 'light'>(settings?.theme || 'dark');
@@ -51,6 +58,13 @@ export const SettingsView: React.FC = () => {
   const [savedStatements, setSavedStatements] = useState<ImportedStatement[]>([]);
   const [loadingStatements, setLoadingStatements] = useState(false);
 
+  // Statement management modal states
+  const [selectedStatementForMove, setSelectedStatementForMove] = useState<ImportedStatement | null>(null);
+  const [selectedStatementForDelete, setSelectedStatementForDelete] = useState<ImportedStatement | null>(null);
+  const [stmtTargetType, setStmtTargetType] = useState<'account' | 'card'>('account');
+  const [stmtTargetId, setStmtTargetId] = useState('');
+  const [isProcessingStmt, setIsProcessingStmt] = useState(false);
+
   const fetchSavedStatements = async () => {
     if (!window.electronAPI?.getSavedStatements) return;
     try {
@@ -67,6 +81,65 @@ export const SettingsView: React.FC = () => {
   useEffect(() => {
     fetchSavedStatements();
   }, []);
+
+  const openMoveModal = (stmt: ImportedStatement) => {
+    setSelectedStatementForMove(stmt);
+    if (stmt.cardId) {
+      setStmtTargetType('card');
+      setStmtTargetId(stmt.cardId);
+    } else if (stmt.accountId) {
+      setStmtTargetType('account');
+      setStmtTargetId(stmt.accountId);
+    } else {
+      setStmtTargetType('account');
+      const defAcc = accounts.find(a => a.active) || accounts[0];
+      setStmtTargetId(defAcc?.id || '');
+    }
+  };
+
+  const handleReassign = async () => {
+    if (!selectedStatementForMove || !stmtTargetId) return;
+    try {
+      setIsProcessingStmt(true);
+      const res = await window.electronAPI.reassignStatementAccount({
+        statementId: selectedStatementForMove.id,
+        targetAccountId: stmtTargetId,
+        targetType: stmtTargetType,
+      });
+      if (res.success) {
+        showToast(res.message || 'Lançamentos movidos com sucesso!', 'success');
+        setSelectedStatementForMove(null);
+        await fetchSavedStatements();
+        await refreshAll();
+      } else {
+        showToast(res.error || 'Erro ao mover lançamentos', 'error');
+      }
+    } catch (e: any) {
+      showToast(e.message || 'Erro ao mover lançamentos', 'error');
+    } finally {
+      setIsProcessingStmt(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!selectedStatementForDelete) return;
+    try {
+      setIsProcessingStmt(true);
+      const res = await window.electronAPI.deleteStatementTransactions(selectedStatementForDelete.id);
+      if (res.success) {
+        showToast(res.message || 'Lançamentos excluídos com sucesso!', 'success');
+        setSelectedStatementForDelete(null);
+        await fetchSavedStatements();
+        await refreshAll();
+      } else {
+        showToast(res.error || 'Erro ao desfazer importação', 'error');
+      }
+    } catch (e: any) {
+      showToast(e.message || 'Erro ao desfazer importação', 'error');
+    } finally {
+      setIsProcessingStmt(false);
+    }
+  };
 
   const handleSaveGeneral = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -475,9 +548,34 @@ export const SettingsView: React.FC = () => {
                     </div>
                   </div>
 
-                  <span className="text-[11px] text-slate-400 shrink-0 font-medium">
-                    {stmt.itemsCount > 0 ? `${stmt.itemsCount} itens` : 'Extrato arquivado'}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="text-[11px] text-slate-400 font-medium mr-1">
+                      {stmt.itemsCount > 0 ? `${stmt.itemsCount} itens` : 'Extrato arquivado'}
+                    </span>
+
+                    {stmt.itemsCount > 0 && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => openMoveModal(stmt)}
+                          title="Mudar conta ou cartão de todos os lançamentos deste extrato"
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-brand-500/10 hover:bg-brand-500/20 text-brand-400 border border-brand-500/30 text-[11px] font-semibold transition-colors"
+                        >
+                          <FolderInput className="w-3.5 h-3.5" />
+                          Mudar Conta
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedStatementForDelete(stmt)}
+                          title="Excluir todos os lançamentos desta importação"
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/30 text-[11px] font-semibold transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                          Desfazer
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -582,6 +680,116 @@ export const SettingsView: React.FC = () => {
         title="Limpar Dados de Demonstração"
         message="Tem certeza que deseja remover todos os dados de demonstração? Seus dados reais continuarão intactos."
         confirmLabel="Sim, remover demo"
+      />
+
+      {/* Statement Move Modal */}
+      <Modal
+        isOpen={!!selectedStatementForMove}
+        onClose={() => setSelectedStatementForMove(null)}
+        title={`Mudar Conta do Extrato: ${selectedStatementForMove?.originalName || ''}`}
+        subtitle="Mova todos os lançamentos que vieram desta importação para a conta correta"
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center gap-4 text-xs font-medium text-slate-300">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="settingsStatementTargetType"
+                checked={stmtTargetType === 'account'}
+                onChange={() => {
+                  setStmtTargetType('account');
+                  const def = accounts.find(a => a.active) || accounts[0];
+                  setStmtTargetId(def?.id || '');
+                }}
+                className="text-brand-600 focus:ring-0"
+              />
+              <span>Conta Bancária / Carteira</span>
+            </label>
+
+            {creditCards.length > 0 && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="settingsStatementTargetType"
+                  checked={stmtTargetType === 'card'}
+                  onChange={() => {
+                    setStmtTargetType('card');
+                    const def = creditCards.find(c => c.active) || creditCards[0];
+                    setStmtTargetId(def?.id || '');
+                  }}
+                  className="text-brand-600 focus:ring-0"
+                />
+                <span>Cartão de Crédito</span>
+              </label>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              {stmtTargetType === 'account' ? 'Selecione a Nova Conta Destino:' : 'Selecione o Novo Cartão Destino:'}
+            </label>
+            {stmtTargetType === 'account' ? (
+              <CustomSelect
+                value={stmtTargetId}
+                onChange={(val) => setStmtTargetId(val)}
+                options={accounts.map(a => ({
+                  value: a.id,
+                  label: a.name,
+                  subtitle: formatCurrency(a.currentBalance),
+                  icon: Landmark,
+                }))}
+                placeholder="Selecione a conta..."
+              />
+            ) : (
+              <CustomSelect
+                value={stmtTargetId}
+                onChange={(val) => setStmtTargetId(val)}
+                options={creditCards.map(c => ({
+                  value: c.id,
+                  label: c.name,
+                  subtitle: `Disp: ${formatCurrency(c.availableLimit)}`,
+                  icon: CardIcon,
+                }))}
+                placeholder="Selecione o cartão..."
+              />
+            )}
+          </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+            Todos os <strong>{selectedStatementForMove?.itemsCount || 0} lançamentos</strong> pertencentes a este extrato serão transferidos para esta conta/cartão e o saldo será ajustado automaticamente.
+          </p>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setSelectedStatementForMove(null)}
+              className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleReassign}
+              disabled={isProcessingStmt || !stmtTargetId}
+              className="px-5 py-2.5 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:pointer-events-none text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-brand-600/20"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              {isProcessingStmt ? 'Movendo...' : 'Confirmar e Mudar Conta do Extrato'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Statement Delete Confirm Dialog */}
+      <ConfirmDialog
+        isOpen={!!selectedStatementForDelete}
+        onClose={() => setSelectedStatementForDelete(null)}
+        onConfirm={handleDelete}
+        title="Desfazer Importação do Extrato"
+        message={`Deseja realmente excluir todos os ${selectedStatementForDelete?.itemsCount || 0} lançamentos importados do arquivo "${selectedStatementForDelete?.originalName}"? Essa ação removerá os lançamentos da conta e ajustará o saldo automaticamente.`}
+        confirmLabel="Sim, desfazer importação"
+        cancelLabel="Cancelar"
       />
 
       {/* Learned Rules Manager Modal */}

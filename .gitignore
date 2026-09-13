@@ -1,4 +1,4 @@
-﻿# Dependências
+# Dependências
 node_modules/
 
 # Compilação e empacotamento
@@ -15,6 +15,8 @@ build/
 *.db-journal
 *.db-wal
 *.db-shm
+imported_statements/
+backups/
 
 # Variáveis de ambiente
 .env
