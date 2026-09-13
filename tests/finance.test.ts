@@ -375,4 +375,91 @@ describe('Financial Rules and Core Logic', () => {
     expect(res.items[0].isDuplicate).toBe(true);
     expect(res.items[1].isDuplicate).toBe(false);
   });
+
+  it('adjusts account balance correctly with positive and negative adjustment transactions', () => {
+    // 1. Initial balance R$ 1.000,00 (100000 cents)
+    const acc = service.createAccount({ name: 'Conta Ajuste Teste', initialBalance: 100000 });
+    expect(acc.currentBalance).toBe(100000);
+
+    // 2. Real balance is R$ 1.500,00 (150000 cents) -> diff = +50000 (Receita de Ajuste)
+    const resPositive = service.adjustAccountBalance({
+      accountId: acc.id,
+      targetBalance: 150000,
+      adjustmentDate: '2026-09-13',
+      mode: 'transaction',
+    });
+
+    expect(resPositive.success).toBe(true);
+    expect(resPositive.diff).toBe(50000);
+    expect(resPositive.transaction.type).toBe('income');
+    expect(resPositive.transaction.amount).toBe(50000);
+    expect(resPositive.account.currentBalance).toBe(150000);
+
+    // 3. Next day, real balance is R$ 1.200,00 (120000 cents) -> diff = -30000 (Despesa de Ajuste)
+    const resNegative = service.adjustAccountBalance({
+      accountId: acc.id,
+      targetBalance: 120000,
+      adjustmentDate: '2026-09-14',
+      mode: 'transaction',
+    });
+
+    expect(resNegative.success).toBe(true);
+    expect(resNegative.diff).toBe(-30000);
+    expect(resNegative.transaction.type).toBe('expense');
+    expect(resNegative.transaction.amount).toBe(30000);
+    expect(resNegative.account.currentBalance).toBe(120000);
+
+    // 4. Test adjust via initial_balance mode
+    const resInitial = service.adjustAccountBalance({
+      accountId: acc.id,
+      targetBalance: 200000, // Wants 2.000,00
+      mode: 'initial_balance',
+    });
+    expect(resInitial.success).toBe(true);
+    expect(resInitial.account.currentBalance).toBe(200000);
+  });
+
+  it('moves transactions in batch from one account to another and updates balances', () => {
+    const accA = service.createAccount({ name: 'Conta Origem A', initialBalance: 50000 });
+    const accB = service.createAccount({ name: 'Conta Destino B', initialBalance: 10000 });
+
+    const tx1 = service.createTransaction({
+      accountId: accA.id,
+      type: 'expense',
+      description: 'Gasto 1',
+      amount: 15000,
+      transactionDate: '2026-09-10',
+      status: 'completed',
+    });
+    const tx2 = service.createTransaction({
+      accountId: accA.id,
+      type: 'income',
+      description: 'Receita 1',
+      amount: 25000,
+      transactionDate: '2026-09-11',
+      status: 'completed',
+    });
+
+    // Before move:
+    // accA: 50000 - 15000 + 25000 = 60000
+    // accB: 10000
+    expect(service.getAccountById(accA.id).currentBalance).toBe(60000);
+    expect(service.getAccountById(accB.id).currentBalance).toBe(10000);
+
+    // Move tx1 and tx2 from accA to accB
+    const moveResult = service.batchMoveTransactions({
+      transactionIds: [tx1.id, tx2.id],
+      targetAccountId: accB.id,
+      targetType: 'account',
+    });
+
+    expect(moveResult.success).toBe(true);
+    expect(moveResult.updatedCount).toBe(2);
+
+    // After move:
+    // accA: 50000 (only initial balance remains)
+    // accB: 10000 - 15000 + 25000 = 20000
+    expect(service.getAccountById(accA.id).currentBalance).toBe(50000);
+    expect(service.getAccountById(accB.id).currentBalance).toBe(20000);
+  });
 });

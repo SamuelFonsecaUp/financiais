@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   createAccount: (data) => ipcRenderer.invoke('accounts:create', data),
   updateAccount: (id, data) => ipcRenderer.invoke('accounts:update', id, data),
   deleteAccount: (id) => ipcRenderer.invoke('accounts:delete', id),
+  adjustAccountBalance: (data) => ipcRenderer.invoke('accounts:adjustBalance', data),
 
   // Categories
   getCategories: () => ipcRenderer.invoke('categories:get'),
@@ -42,6 +43,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   updateTransaction: (id, data) => ipcRenderer.invoke('transactions:update', id, data),
   deleteTransaction: (id, deleteGroup) => ipcRenderer.invoke('transactions:delete', id, deleteGroup),
   duplicateTransaction: (id) => ipcRenderer.invoke('transactions:duplicate', id),
+  batchMoveTransactions: (data) => ipcRenderer.invoke('transactions:batchMove', data),
 
   // Recurring Rules
   getRecurringRules: () => ipcRenderer.invoke('recurring:get'),

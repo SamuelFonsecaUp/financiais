@@ -235,6 +235,75 @@ class FinancialService {
     return true;
   }
 
+  adjustAccountBalance({ accountId, targetBalance, adjustmentDate, mode = 'transaction', notes }) {
+    const account = this.getAccountById(accountId);
+    if (!account) throw new Error('Conta não encontrada.');
+
+    const target = parseInt(targetBalance, 10);
+    if (isNaN(target)) throw new Error('Saldo alvo inválido.');
+
+    const current = account.currentBalance;
+    const diff = target - current;
+
+    if (diff === 0) {
+      return { success: true, diff: 0, message: 'O saldo já está correto.', account: this.getAccountById(accountId) };
+    }
+
+    if (mode === 'initial_balance') {
+      const newInitial = account.initialBalance + diff;
+      this.updateAccount(accountId, { initialBalance: newInitial });
+      return {
+        success: true,
+        diff,
+        mode: 'initial_balance',
+        account: this.getAccountById(accountId),
+      };
+    }
+
+    // mode === 'transaction'
+    const now = new Date().toISOString();
+    const date = adjustmentDate || now.slice(0, 10);
+    const type = diff > 0 ? 'income' : 'expense';
+    const amount = Math.abs(diff);
+    const desc = diff > 0 ? 'Ajuste de Saldo (+)' : 'Ajuste de Saldo (-)';
+
+    // Find or create category "Ajuste de Saldo"
+    let category = this.db.prepare(`SELECT id FROM categories WHERE name = 'Ajuste de Saldo' AND type = ?`).get(type);
+    if (!category) {
+      const existingOutros = this.db.prepare(`SELECT id FROM categories WHERE name LIKE '%Outr%' AND type = ?`).get(type);
+      if (existingOutros) {
+        category = existingOutros;
+      } else {
+        const newCatId = crypto.randomUUID();
+        this.db.prepare(`
+          INSERT INTO categories (id, name, type, color, icon, active, is_system, created_at)
+          VALUES (?, 'Ajuste de Saldo', ?, '#64748b', 'Scale', 1, 1, ?)
+        `).run(newCatId, type, now);
+        category = { id: newCatId };
+      }
+    }
+
+    const tx = this.createTransaction({
+      accountId,
+      categoryId: category ? category.id : null,
+      type,
+      description: desc,
+      amount,
+      transactionDate: date,
+      status: 'completed',
+      notes: notes || 'Ajuste de reconciliação de saldo',
+      tags: 'ajuste_saldo',
+    });
+
+    return {
+      success: true,
+      diff,
+      mode: 'transaction',
+      transaction: tx,
+      account: this.getAccountById(accountId),
+    };
+  }
+
   // --- CATEGORIES ---
   getCategories() {
     const rows = this.db.prepare(`
@@ -891,6 +960,57 @@ class FinancialService {
     };
 
     return this.createTransaction(newTx);
+  }
+
+  batchMoveTransactions({ transactionIds, targetAccountId, targetType = 'account' }) {
+    if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
+      throw new Error('Nenhum lançamento informado para mover.');
+    }
+    if (!targetAccountId) {
+      throw new Error('Conta ou cartão de destino é obrigatório.');
+    }
+
+    let closingDay = null;
+    if (targetType === 'card') {
+      const card = this.getCreditCardById(targetAccountId);
+      if (!card) throw new Error('Cartão de destino não encontrado.');
+      closingDay = card.closingDay;
+    } else {
+      const acc = this.getAccountById(targetAccountId);
+      if (!acc) throw new Error('Conta de destino não encontrada.');
+    }
+
+    const now = new Date().toISOString();
+    let updatedCount = 0;
+
+    const runBatch = this.db.transaction(() => {
+      for (const id of transactionIds) {
+        const tx = this.getTransactionById(id);
+        if (!tx) continue;
+
+        if (targetType === 'card') {
+          const invoiceMonth = calculateInvoiceMonth(tx.transactionDate, closingDay);
+          this.db.prepare(`
+            UPDATE transactions
+            SET credit_card_id = ?, account_id = NULL, destination_account_id = NULL, invoice_month = ?, updated_at = ?
+            WHERE id = ?
+          `).run(targetAccountId, invoiceMonth, now, id);
+        } else {
+          if (tx.type === 'transfer' && tx.destinationAccountId === targetAccountId) {
+            continue;
+          }
+          this.db.prepare(`
+            UPDATE transactions
+            SET account_id = ?, credit_card_id = NULL, invoice_month = NULL, updated_at = ?
+            WHERE id = ?
+          `).run(targetAccountId, now, id);
+        }
+        updatedCount++;
+      }
+    });
+
+    runBatch();
+    return { success: true, updatedCount };
   }
 
   // --- RECURRING RULES ---

@@ -1064,6 +1064,63 @@ const ImportViewContent: React.FC = () => {
         {/* STEP 3: MAIN REVIEW & RECONCILIATION WORKSPACE */}
         {step === 'review' && (
           <div className="space-y-6 animate-fade-in">
+            {/* Destination Selector in Review Mode */}
+            <div className="p-3.5 px-4 bg-slate-900/90 border border-brand-500/30 rounded-2xl flex flex-col md:flex-row md:items-center justify-between gap-3 shadow-lg">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-xl bg-brand-500/20 text-brand-400 flex items-center justify-center shrink-0">
+                  {destType === 'card' ? <CreditCardIcon className="w-4 h-4" /> : <Landmark className="w-4 h-4" />}
+                </div>
+                <div>
+                  <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block">
+                    Destino da Importação:
+                  </span>
+                  <span className="text-xs font-bold text-white">
+                    {destType === 'card'
+                      ? activeCards.find(c => c.id === destinationId)?.name || 'Cartão Selecionado'
+                      : activeAccounts.find(a => a.id === destinationId)?.name || 'Conta Selecionada'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                <span className="text-xs text-slate-400 font-medium whitespace-nowrap">Alterar Destino:</span>
+                <div className="w-56">
+                  {destType === 'account' ? (
+                    <CustomSelect
+                      options={accountOptions}
+                      value={destinationId}
+                      onChange={(val) => handleDestinationChange('account', val)}
+                      placeholder="Mudar conta..."
+                    />
+                  ) : (
+                    <CustomSelect
+                      options={cardOptions}
+                      value={destinationId}
+                      onChange={(val) => handleDestinationChange('card', val)}
+                      placeholder="Mudar cartão..."
+                    />
+                  )}
+                </div>
+                {activeCards.length > 0 && activeAccounts.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (destType === 'account') {
+                        const firstCard = activeCards[0]?.id || '';
+                        handleDestinationChange('card', firstCard);
+                      } else {
+                        const firstAcc = activeAccounts[0]?.id || '';
+                        handleDestinationChange('account', firstAcc);
+                      }
+                    }}
+                    className="px-3 py-2 rounded-xl text-xs font-semibold text-slate-300 bg-slate-800 hover:bg-slate-750 border border-slate-700 transition-colors whitespace-nowrap"
+                  >
+                    {destType === 'account' ? 'Mudar p/ Cartão' : 'Mudar p/ Conta'}
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Top Metrics Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
               <div className="p-4 bg-slate-900/60 border border-slate-850 rounded-2xl">

@@ -135,6 +135,7 @@ app.whenReady().then(() => {
   handleIpc('accounts:create', (data) => service.createAccount(data));
   handleIpc('accounts:update', (id, data) => service.updateAccount(id, data));
   handleIpc('accounts:delete', (id) => service.deleteAccount(id));
+  handleIpc('accounts:adjustBalance', (data) => service.adjustAccountBalance(data));
 
   // Categories
   handleIpc('categories:get', () => service.getCategories());
@@ -156,6 +157,7 @@ app.whenReady().then(() => {
   handleIpc('transactions:update', (id, data) => service.updateTransaction(id, data));
   handleIpc('transactions:delete', (id, deleteGroup) => service.deleteTransaction(id, deleteGroup));
   handleIpc('transactions:duplicate', (id) => service.duplicateTransaction(id));
+  handleIpc('transactions:batchMove', (data) => service.batchMoveTransactions(data));
 
   // Recurring Rules
   handleIpc('recurring:get', () => service.getRecurringRules());

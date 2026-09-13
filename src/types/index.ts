@@ -427,6 +427,20 @@ export interface ElectronAPI {
   createAccount: (data: Partial<Account>) => Promise<Account>;
   updateAccount: (id: string, data: Partial<Account>) => Promise<Account>;
   deleteAccount: (id: string) => Promise<boolean>;
+  adjustAccountBalance: (data: {
+    accountId: string;
+    targetBalance: number;
+    adjustmentDate?: string;
+    mode?: 'transaction' | 'initial_balance';
+    notes?: string;
+  }) => Promise<{
+    success: boolean;
+    diff: number;
+    mode?: string;
+    message?: string;
+    transaction?: any;
+    account?: Account;
+  }>;
 
   getCategories: () => Promise<Category[]>;
   createCategory: (data: Partial<Category>) => Promise<Category>;
@@ -451,6 +465,11 @@ export interface ElectronAPI {
   updateTransaction: (id: string, data: any) => Promise<Transaction>;
   deleteTransaction: (id: string, deleteGroup?: boolean) => Promise<boolean>;
   duplicateTransaction: (id: string) => Promise<any>;
+  batchMoveTransactions: (data: {
+    transactionIds: string[];
+    targetAccountId: string;
+    targetType?: 'account' | 'card';
+  }) => Promise<{ success: boolean; updatedCount: number }>;
 
   // Recurring Rules
   getRecurringRules: () => Promise<RecurringRule[]>;

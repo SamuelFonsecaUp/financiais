@@ -11,11 +11,13 @@ import {
   Trash2,
   CheckCircle2,
   ArchiveRestore,
+  Scale,
 } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
 import { Account } from '../types';
 import { formatCurrency } from '../utils/formatters';
 import { AccountModal } from './AccountModal';
+import { AdjustBalanceModal } from './AdjustBalanceModal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EmptyState } from '../components/EmptyState';
 
@@ -23,6 +25,7 @@ export const AccountsView: React.FC = () => {
   const { accounts, refreshAll, showToast } = useFinancial();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
+  const [adjustAccount, setAdjustAccount] = useState<Account | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<Account | null>(null);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -165,6 +168,14 @@ export const AccountsView: React.FC = () => {
                     {/* Actions Menu */}
                     <div className="flex items-center gap-1">
                       <button
+                        onClick={() => setAdjustAccount(account)}
+                        title="Ajustar Saldo da Conta"
+                        className="p-1.5 text-slate-400 hover:text-brand-400 hover:bg-brand-500/10 rounded-lg transition-colors"
+                      >
+                        <Scale className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
                         onClick={() => {
                           setEditingAccount(account);
                           setModalOpen(true);
@@ -199,7 +210,17 @@ export const AccountsView: React.FC = () => {
 
                   {/* Balances */}
                   <div className="my-4 pt-3 border-t border-slate-800/60">
-                    <div className="text-xs text-slate-400 mb-1">Saldo Atual Calculado</div>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-slate-400">Saldo Atual Calculado</span>
+                      <button
+                        onClick={() => setAdjustAccount(account)}
+                        className="flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold text-brand-400 bg-brand-500/10 hover:bg-brand-500/20 border border-brand-500/20 rounded-md transition-colors"
+                        title="Clique para acertar o saldo com o banco hoje"
+                      >
+                        <Scale className="w-3 h-3" />
+                        Ajustar
+                      </button>
+                    </div>
                     <div className={`text-2xl font-bold font-mono tracking-tight ${
                       account.currentBalance >= 0 ? 'text-white' : 'text-rose-400'
                     }`}>
@@ -218,6 +239,13 @@ export const AccountsView: React.FC = () => {
           })}
         </div>
       )}
+
+      {/* Adjust Balance Modal */}
+      <AdjustBalanceModal
+        isOpen={Boolean(adjustAccount)}
+        onClose={() => setAdjustAccount(null)}
+        account={adjustAccount}
+      />
 
       {/* Account Create/Edit Modal */}
       <AccountModal

@@ -200,7 +200,7 @@ export const TransactionModal: React.FC = () => {
         )}
 
         {/* Type Selector (Despesa / Receita / Transferência) */}
-        {!editingTransaction && (
+        {(!editingTransaction || !isInstallment) && (
           <div className="grid grid-cols-3 gap-2 p-1 bg-slate-950/70 border border-slate-800 rounded-xl">
             <button
               type="button"
@@ -347,14 +347,20 @@ export const TransactionModal: React.FC = () => {
         ) : (
           /* Payment method: Account or Credit Card */
           <div className="space-y-4">
-            {type === 'expense' && creditCards.length > 0 && !editingTransaction && (
+            {type === 'expense' && creditCards.length > 0 && (
               <div className="flex items-center gap-4 text-xs font-medium text-slate-300">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="radio"
                     name="paymentMode"
                     checked={paymentMode === 'account'}
-                    onChange={() => setPaymentMode('account')}
+                    onChange={() => {
+                      setPaymentMode('account');
+                      if (!accountId && accounts.length > 0) {
+                        const def = accounts.find(a => a.active) || accounts[0];
+                        if (def) setAccountId(def.id);
+                      }
+                    }}
                     className="text-brand-600 focus:ring-0"
                   />
                   <span>Conta Bancária / Dinheiro</span>
@@ -365,7 +371,13 @@ export const TransactionModal: React.FC = () => {
                     type="radio"
                     name="paymentMode"
                     checked={paymentMode === 'card'}
-                    onChange={() => setPaymentMode('card')}
+                    onChange={() => {
+                      setPaymentMode('card');
+                      if (!creditCardId && creditCards.length > 0) {
+                        const def = creditCards.find(c => c.active) || creditCards[0];
+                        if (def) setCreditCardId(def.id);
+                      }
+                    }}
                     className="text-brand-600 focus:ring-0"
                   />
                   <span className="flex items-center gap-1.5">

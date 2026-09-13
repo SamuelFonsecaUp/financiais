@@ -16,6 +16,8 @@ import {
   X,
   Landmark,
   CreditCard as CardIcon,
+  FolderInput,
+  CheckCircle2,
 } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
 import { Transaction } from '../types';
@@ -23,6 +25,7 @@ import { formatCurrency, formatDate, getCurrentMonthString } from '../utils/form
 import { EmptyState } from '../components/EmptyState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { CustomSelect } from '../components/CustomSelect';
+import { Modal } from '../components/Modal';
 
 export const TransactionsView: React.FC = () => {
   const {
@@ -55,6 +58,85 @@ export const TransactionsView: React.FC = () => {
   // Delete modal state
   const [deleteCandidate, setDeleteCandidate] = useState<Transaction | null>(null);
   const [deleteEntireGroup, setDeleteEntireGroup] = useState(false);
+
+  // Batch selection state
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [batchMoveModalOpen, setBatchMoveModalOpen] = useState(false);
+  const [batchTargetType, setBatchTargetType] = useState<'account' | 'card'>('account');
+  const [batchTargetId, setBatchTargetId] = useState('');
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false);
+  const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+
+  useEffect(() => {
+    if (batchMoveModalOpen) {
+      if (batchTargetType === 'account' && accounts.length > 0) {
+        const def = accounts.find(a => a.active) || accounts[0];
+        setBatchTargetId(def?.id || '');
+      } else if (batchTargetType === 'card' && creditCards.length > 0) {
+        const def = creditCards.find(c => c.active) || creditCards[0];
+        setBatchTargetId(def?.id || '');
+      }
+    }
+  }, [batchMoveModalOpen, batchTargetType, accounts, creditCards]);
+
+  const toggleSelectAll = () => {
+    if (selectedIds.length === transactions.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(transactions.map(t => t.id));
+    }
+  };
+
+  const toggleSelectTx = (id: string) => {
+    setSelectedIds(prev =>
+      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
+    );
+  };
+
+  const handleBatchMove = async () => {
+    if (!batchTargetId || selectedIds.length === 0) return;
+    setIsBatchProcessing(true);
+    try {
+      const res = await window.electronAPI.batchMoveTransactions({
+        transactionIds: selectedIds,
+        targetAccountId: batchTargetId,
+        targetType: batchTargetType,
+      });
+
+      const targetName = batchTargetType === 'card'
+        ? creditCards.find(c => c.id === batchTargetId)?.name
+        : accounts.find(a => a.id === batchTargetId)?.name;
+
+      showToast(`${res.updatedCount} lançamentos movidos com sucesso para "${targetName}"!`, 'success');
+      setBatchMoveModalOpen(false);
+      setSelectedIds([]);
+      await refreshAll();
+      loadTransactions();
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao mover lançamentos', 'error');
+    } finally {
+      setIsBatchProcessing(false);
+    }
+  };
+
+  const handleBatchDelete = async () => {
+    if (selectedIds.length === 0) return;
+    setIsBatchProcessing(true);
+    try {
+      for (const id of selectedIds) {
+        await window.electronAPI.deleteTransaction(id);
+      }
+      showToast(`${selectedIds.length} lançamentos excluídos com sucesso!`, 'success');
+      setBatchDeleteConfirmOpen(false);
+      setSelectedIds([]);
+      await refreshAll();
+      loadTransactions();
+    } catch (err: any) {
+      showToast(err.message || 'Erro ao excluir lançamentos', 'error');
+    } finally {
+      setIsBatchProcessing(false);
+    }
+  };
 
   // Load transactions based on filters
   const loadTransactions = async () => {
@@ -418,7 +500,16 @@ export const TransactionsView: React.FC = () => {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-slate-800/80 bg-slate-950/40 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                    <th className="py-3.5 pl-4">Data</th>
+                    <th className="py-3.5 pl-4 w-10 text-center">
+                      <input
+                        type="checkbox"
+                        checked={transactions.length > 0 && selectedIds.length === transactions.length}
+                        onChange={toggleSelectAll}
+                        title="Selecionar todos os lançamentos visíveis"
+                        className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-900 text-brand-500 focus:ring-0 cursor-pointer"
+                      />
+                    </th>
+                    <th className="py-3.5 px-3">Data</th>
                     <th className="py-3.5 px-3">Descrição</th>
                     <th className="py-3.5 px-3">Categoria</th>
                     <th className="py-3.5 px-3">Conta / Cartão</th>
@@ -433,13 +524,24 @@ export const TransactionsView: React.FC = () => {
                     const isExpense = tx.type === 'expense';
                     const isTransfer = tx.type === 'transfer';
                     const isPayment = tx.type === 'card_payment';
+                    const isSelected = selectedIds.includes(tx.id);
 
                     return (
                       <tr
                         key={tx.id}
-                        className="hover:bg-slate-800/30 transition-colors group"
+                        className={`transition-colors group ${
+                          isSelected ? 'bg-brand-500/10 hover:bg-brand-500/15' : 'hover:bg-slate-800/30'
+                        }`}
                       >
-                        <td className="py-3.5 pl-4 text-slate-400 font-mono whitespace-nowrap">
+                        <td className="py-3.5 pl-4 text-center">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={() => toggleSelectTx(tx.id)}
+                            className="w-3.5 h-3.5 rounded border-slate-700 bg-slate-900 text-brand-500 focus:ring-0 cursor-pointer"
+                          />
+                        </td>
+                        <td className="py-3.5 px-3 text-slate-400 font-mono whitespace-nowrap">
                           {formatDate(tx.transactionDate)}
                         </td>
 
@@ -637,6 +739,155 @@ export const TransactionsView: React.FC = () => {
             : `Tem certeza que deseja excluir o lançamento "${deleteCandidate?.description}"? Essa ação não poderá ser desfeita.`
         }
         confirmLabel="Sim, excluir"
+        cancelLabel="Cancelar"
+      />
+
+      {/* Floating Batch Action Toolbar */}
+      {selectedIds.length > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900/95 border border-brand-500/50 backdrop-blur-md rounded-2xl shadow-2xl px-5 py-3 flex items-center gap-4 text-xs animate-fade-in">
+          <div className="flex items-center gap-2">
+            <span className="w-6 h-6 rounded-full bg-brand-500/20 text-brand-400 font-bold flex items-center justify-center text-xs">
+              {selectedIds.length}
+            </span>
+            <span className="text-white font-medium whitespace-nowrap">
+              {selectedIds.length === 1 ? 'lançamento selecionado' : 'lançamentos selecionados'}
+            </span>
+          </div>
+
+          <div className="h-4 w-[1px] bg-slate-800" />
+
+          <button
+            onClick={() => setBatchMoveModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-600 hover:bg-brand-500 text-white font-semibold transition-all shadow-md shadow-brand-600/20 whitespace-nowrap"
+          >
+            <FolderInput className="w-3.5 h-3.5" />
+            Mover p/ Outra Conta
+          </button>
+
+          <button
+            onClick={() => setBatchDeleteConfirmOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 border border-rose-500/20 font-semibold transition-all whitespace-nowrap"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Excluir
+          </button>
+
+          <button
+            onClick={() => setSelectedIds([])}
+            className="text-slate-400 hover:text-white px-2 py-1 font-medium transition-colors whitespace-nowrap"
+          >
+            Desmarcar
+          </button>
+        </div>
+      )}
+
+      {/* Batch Move Modal */}
+      <Modal
+        isOpen={batchMoveModalOpen}
+        onClose={() => setBatchMoveModalOpen(false)}
+        title={`Mover ${selectedIds.length} Lançamentos`}
+        subtitle="Escolha a conta bancária ou cartão de crédito para onde deseja transferir os lançamentos selecionados"
+        maxWidth="md"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center gap-4 text-xs font-medium text-slate-300">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name="batchTargetType"
+                checked={batchTargetType === 'account'}
+                onChange={() => {
+                  setBatchTargetType('account');
+                  const def = accounts.find(a => a.active) || accounts[0];
+                  setBatchTargetId(def?.id || '');
+                }}
+                className="text-brand-600 focus:ring-0"
+              />
+              <span>Conta Bancária / Carteira</span>
+            </label>
+
+            {creditCards.length > 0 && (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="batchTargetType"
+                  checked={batchTargetType === 'card'}
+                  onChange={() => {
+                    setBatchTargetType('card');
+                    const def = creditCards.find(c => c.active) || creditCards[0];
+                    setBatchTargetId(def?.id || '');
+                  }}
+                  className="text-brand-600 focus:ring-0"
+                />
+                <span>Cartão de Crédito</span>
+              </label>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-slate-400 mb-1.5">
+              {batchTargetType === 'account' ? 'Selecione a Nova Conta Destino:' : 'Selecione o Novo Cartão Destino:'}
+            </label>
+            {batchTargetType === 'account' ? (
+              <CustomSelect
+                value={batchTargetId}
+                onChange={(val) => setBatchTargetId(val)}
+                options={accounts.map(a => ({
+                  value: a.id,
+                  label: a.name,
+                  subtitle: formatCurrency(a.currentBalance),
+                  icon: Landmark,
+                }))}
+                placeholder="Selecione a conta..."
+              />
+            ) : (
+              <CustomSelect
+                value={batchTargetId}
+                onChange={(val) => setBatchTargetId(val)}
+                options={creditCards.map(c => ({
+                  value: c.id,
+                  label: c.name,
+                  subtitle: `Disp: ${formatCurrency(c.availableLimit)}`,
+                  icon: CardIcon,
+                }))}
+                placeholder="Selecione o cartão..."
+              />
+            )}
+          </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed p-3 bg-slate-950/60 rounded-xl border border-slate-800">
+            Todos os {selectedIds.length} lançamentos selecionados serão transferidos para esta conta/cartão e o saldo de ambas as contas será recalculado automaticamente.
+          </p>
+
+          <div className="flex items-center justify-end gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setBatchMoveModalOpen(false)}
+              className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleBatchMove}
+              disabled={isBatchProcessing || !batchTargetId}
+              className="px-5 py-2.5 bg-brand-600 hover:bg-brand-500 disabled:opacity-50 disabled:pointer-events-none text-white rounded-xl text-xs font-bold flex items-center gap-2 transition-all shadow-lg shadow-brand-600/20"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              {isBatchProcessing ? 'Movendo...' : `Confirmar e Mover (${selectedIds.length})`}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Confirmation Dialog for Batch Deletion */}
+      <ConfirmDialog
+        isOpen={batchDeleteConfirmOpen}
+        onClose={() => setBatchDeleteConfirmOpen(false)}
+        onConfirm={handleBatchDelete}
+        title="Excluir Lançamentos em Lote"
+        message={`Deseja realmente excluir todos os ${selectedIds.length} lançamentos selecionados? Essa ação não poderá ser desfeita.`}
+        confirmLabel="Sim, excluir todos"
         cancelLabel="Cancelar"
       />
     </div>
