@@ -117,6 +117,7 @@ class CloudSyncEngine {
     const payload = rows.map(r => {
       const copy = { ...r };
       delete copy.sync_status;
+      delete copy.is_demo;
       copy.user_id = session.userId;
       if (!copy.updated_at) {
         copy.updated_at = new Date().toISOString();
@@ -180,37 +181,42 @@ class CloudSyncEngine {
     const remoteRows = await res.json();
     if (!Array.isArray(remoteRows) || remoteRows.length === 0) return 0;
 
-    const runPull = this.db.transaction(() => {
-      for (const remote of remoteRows) {
-        const local = this.db.prepare(`SELECT id, updated_at, deleted_at FROM ${tableName} WHERE id = ?`).get(remote.id);
+    this.db.pragma('foreign_keys = OFF');
+    try {
+      const runPull = this.db.transaction(() => {
+        for (const remote of remoteRows) {
+          const local = this.db.prepare(`SELECT id, updated_at, deleted_at FROM ${tableName} WHERE id = ?`).get(remote.id);
 
-        if (!local) {
-          // New record from another device
-          this.insertLocalRow(tableName, remote);
-        } else {
-          // Existing record: Last-Write-Wins comparison
-          const remoteTime = remote.updated_at ? new Date(remote.updated_at).getTime() : 0;
-          const localTime = local.updated_at ? new Date(local.updated_at).getTime() : 0;
+          if (!local) {
+            // New record from another device
+            this.insertLocalRow(tableName, remote);
+          } else {
+            // Existing record: Last-Write-Wins comparison
+            const remoteTime = remote.updated_at ? new Date(remote.updated_at).getTime() : 0;
+            const localTime = local.updated_at ? new Date(local.updated_at).getTime() : 0;
 
-          if (remoteTime >= localTime) {
-            this.updateLocalRow(tableName, remote);
+            if (remoteTime >= localTime) {
+              this.updateLocalRow(tableName, remote);
+            }
           }
         }
-      }
 
-      // Update sync metadata
-      const latestRemote = remoteRows[remoteRows.length - 1];
-      const newSyncTimestamp = latestRemote?.updated_at || new Date().toISOString();
+        // Update sync metadata
+        const latestRemote = remoteRows[remoteRows.length - 1];
+        const newSyncTimestamp = latestRemote?.updated_at || new Date().toISOString();
 
-      this.db.prepare(`
-        INSERT INTO sync_metadata (table_name, last_synced_at)
-        VALUES (?, ?)
-        ON CONFLICT(table_name) DO UPDATE SET last_synced_at = excluded.last_synced_at
-      `).run(tableName, newSyncTimestamp);
-    });
+        this.db.prepare(`
+          INSERT INTO sync_metadata (table_name, last_synced_at)
+          VALUES (?, ?)
+          ON CONFLICT(table_name) DO UPDATE SET last_synced_at = excluded.last_synced_at
+        `).run(tableName, newSyncTimestamp);
+      });
 
-    runPull();
-    return remoteRows.length;
+      runPull();
+      return remoteRows.length;
+    } finally {
+      this.db.pragma('foreign_keys = ON');
+    }
   }
 
   // Full Pull for fresh installations on another computer
@@ -221,54 +227,76 @@ class CloudSyncEngine {
     }
 
     let totalRestored = 0;
+    this.db.pragma('foreign_keys = OFF');
 
-    for (const table of SYNC_TABLES) {
-      const endpoint = `${session.supabaseUrl.replace(/\/$/, '')}/rest/v1/${table}?select=*&user_id=eq.${session.userId}`;
-      const res = await fetch(endpoint, {
-        method: 'GET',
-        headers: {
-          'apikey': session.supabaseAnonKey,
-          'Authorization': `Bearer ${session.accessToken}`,
-        },
-      });
+    try {
+      for (const table of SYNC_TABLES) {
+        const endpoint = `${session.supabaseUrl.replace(/\/$/, '')}/rest/v1/${table}?select=*&user_id=eq.${session.userId}`;
+        const res = await fetch(endpoint, {
+          method: 'GET',
+          headers: {
+            'apikey': session.supabaseAnonKey,
+            'Authorization': `Bearer ${session.accessToken}`,
+          },
+        });
 
-      if (res.ok) {
-        const rows = await res.json();
-        if (Array.isArray(rows) && rows.length > 0) {
-          const runInsert = this.db.transaction(() => {
-            for (const r of rows) {
-              const local = this.db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(r.id);
-              if (!local) {
-                this.insertLocalRow(table, r);
-              } else {
-                this.updateLocalRow(table, r);
+        if (res.ok) {
+          const rows = await res.json();
+          if (Array.isArray(rows) && rows.length > 0) {
+            const runInsert = this.db.transaction(() => {
+              for (const r of rows) {
+                const local = this.db.prepare(`SELECT id FROM ${table} WHERE id = ?`).get(r.id);
+                if (!local) {
+                  this.insertLocalRow(table, r);
+                } else {
+                  this.updateLocalRow(table, r);
+                }
               }
-            }
-            this.db.prepare(`
-              INSERT INTO sync_metadata (table_name, last_synced_at)
-              VALUES (?, ?)
-              ON CONFLICT(table_name) DO UPDATE SET last_synced_at = excluded.last_synced_at
-            `).run(table, new Date().toISOString());
-          });
-          runInsert();
-          totalRestored += rows.length;
+              this.db.prepare(`
+                INSERT INTO sync_metadata (table_name, last_synced_at)
+                VALUES (?, ?)
+                ON CONFLICT(table_name) DO UPDATE SET last_synced_at = excluded.last_synced_at
+              `).run(table, new Date().toISOString());
+            });
+            runInsert();
+            totalRestored += rows.length;
+          }
         }
       }
+
+      const now = new Date().toISOString();
+      this.auth.saveSession({ lastSyncAt: now });
+
+      return {
+        success: true,
+        totalRestored,
+        timestamp: now,
+      };
+    } finally {
+      this.db.pragma('foreign_keys = ON');
     }
+  }
 
-    const now = new Date().toISOString();
-    this.auth.saveSession({ lastSyncAt: now });
-
-    return {
-      success: true,
-      totalRestored,
-      timestamp: now,
-    };
+  // Cached local column validator
+  getTableColumns(tableName) {
+    if (!this._tableColumnsCache) this._tableColumnsCache = {};
+    if (!this._tableColumnsCache[tableName]) {
+      const cols = this.db.prepare(`PRAGMA table_info(${tableName})`).all();
+      this._tableColumnsCache[tableName] = new Set(cols.map(c => c.name));
+    }
+    return this._tableColumnsCache[tableName];
   }
 
   // Insert a remote row into local SQLite
   insertLocalRow(tableName, row) {
-    const cleanRow = { ...row, sync_status: 'synced' };
+    const validCols = this.getTableColumns(tableName);
+    const cleanRow = { sync_status: 'synced' };
+    for (const [k, v] of Object.entries(row)) {
+      if (validCols.has(k)) {
+        cleanRow[k] = v;
+      }
+    }
+
     const keys = Object.keys(cleanRow);
     const placeholders = keys.map(() => '?').join(', ');
     const values = keys.map(k => cleanRow[k]);
@@ -285,9 +313,14 @@ class CloudSyncEngine {
 
   // Update a local row from remote
   updateLocalRow(tableName, row) {
-    const cleanRow = { ...row, sync_status: 'synced' };
-    const id = cleanRow.id;
-    delete cleanRow.id;
+    const validCols = this.getTableColumns(tableName);
+    const id = row.id;
+    const cleanRow = { sync_status: 'synced' };
+    for (const [k, v] of Object.entries(row)) {
+      if (k !== 'id' && validCols.has(k)) {
+        cleanRow[k] = v;
+      }
+    }
 
     const keys = Object.keys(cleanRow);
     const assignments = keys.map(k => `${k} = ?`).join(', ');

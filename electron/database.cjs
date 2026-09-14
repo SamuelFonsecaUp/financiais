@@ -256,6 +256,7 @@ function initDatabase(customPath = null) {
     `ALTER TABLE import_rules ADD COLUMN deleted_at TEXT`,
     `ALTER TABLE import_rules ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
 
+    `ALTER TABLE imported_statements ADD COLUMN created_at TEXT`,
     `ALTER TABLE imported_statements ADD COLUMN user_id TEXT`,
     `ALTER TABLE imported_statements ADD COLUMN updated_at TEXT`,
     `ALTER TABLE imported_statements ADD COLUMN deleted_at TEXT`,

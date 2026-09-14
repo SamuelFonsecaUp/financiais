@@ -47,10 +47,16 @@ export const CloudAuthModal: React.FC<CloudAuthModalProps> = ({ isOpen, onClose 
       if (!window.electronAPI) return;
       const res = await window.electronAPI.cloudSignIn(email, password);
 
-      showToast(`Bem-vindo, ${res.user.email}! Nuvem conectada.`, 'success');
+      showToast(`Bem-vindo, ${res.user.email}! Carregando seus dados...`, 'info');
       await refreshCloudSession();
+      try {
+        await window.electronAPI.cloudFullPull();
+      } catch (pullErr) {
+        console.warn('Initial pull:', pullErr);
+      }
       await triggerSync();
       await refreshAll();
+      showToast('Nuvem conectada e dados sincronizados com sucesso!', 'success');
       onClose();
     } catch (err: any) {
       setErrorMsg(err.message || 'Falha ao autenticar.');
