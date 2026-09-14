@@ -82,6 +82,10 @@ interface FinancialContextType {
   setFilterAccountId: (id: string | null) => void;
   navigateToAccountTransactions: (accountId: string) => void;
 
+  // Theme (Dark / Light)
+  theme: 'dark' | 'light';
+  toggleTheme: () => Promise<void>;
+
   // Cloud Auth & Sync (Supabase / Local-First)
   cloudSession: CloudSession | null;
   syncStatus: 'synced' | 'offline' | 'local_only' | 'syncing' | 'error';
@@ -110,6 +114,30 @@ export const FinancialProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [toasts, setToasts] = useState<ToastInfo[]>([]);
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+
+  const applyTheme = (t: 'dark' | 'light') => {
+    setTheme(t);
+    if (t === 'light') {
+      document.documentElement.classList.remove('dark');
+      document.documentElement.classList.add('light');
+    } else {
+      document.documentElement.classList.remove('light');
+      document.documentElement.classList.add('dark');
+    }
+  };
+
+  const toggleTheme = useCallback(async () => {
+    const next = theme === 'dark' ? 'light' : 'dark';
+    applyTheme(next);
+    if (window.electronAPI) {
+      try {
+        await window.electronAPI.updateSettings({ theme: next });
+      } catch (e) {
+        console.error('Failed to save theme preference:', e);
+      }
+    }
+  }, [theme]);
 
   // Transaction Modal State
   const [transactionModalOpen, setTransactionModalOpen] = useState(false);
@@ -250,11 +278,8 @@ export const FinancialProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       setDashboardData(dash);
 
       // Apply theme
-      if (s?.theme === 'light') {
-        document.documentElement.classList.remove('dark');
-      } else {
-        document.documentElement.classList.add('dark');
-      }
+      const currentTheme = s?.theme === 'light' ? 'light' : 'dark';
+      applyTheme(currentTheme);
     } catch (err: any) {
       console.error('Error refreshing data:', err);
       showToast(err.message || 'Erro ao carregar dados do banco local.', 'error');
@@ -391,6 +416,8 @@ export const FinancialProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         filterAccountId,
         setFilterAccountId,
         navigateToAccountTransactions,
+        theme,
+        toggleTheme,
         cloudSession,
         syncStatus,
         isSyncing,

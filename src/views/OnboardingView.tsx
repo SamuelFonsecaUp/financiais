@@ -147,12 +147,14 @@ export const OnboardingView: React.FC = () => {
         <div className="absolute -top-24 -left-24 w-48 h-48 bg-brand-500/20 rounded-full blur-3xl pointer-events-none" />
 
         {/* Brand Header */}
-        <div className="flex items-center gap-3 mb-6">
-          <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-brand-600 to-emerald-400 flex items-center justify-center text-white shadow-lg shadow-brand-600/20">
-            <WalletCards className="w-6 h-6" />
-          </div>
+        <div className="flex items-center gap-3.5 mb-6">
+          <img
+            src="/assets/pigo-icon.png"
+            alt="Pigo Logo"
+            className="w-12 h-12 rounded-2xl shadow-lg object-contain shrink-0 border border-emerald-500/20"
+          />
           <div>
-            <h1 className="text-xl font-bold text-white tracking-tight">Meu Financeiro</h1>
+            <h1 className="text-xl font-black text-white tracking-tight">Pigo Finanças</h1>
             <p className="text-xs text-slate-400">Controle financeiro pessoal 100% offline & na nuvem</p>
           </div>
         </div>

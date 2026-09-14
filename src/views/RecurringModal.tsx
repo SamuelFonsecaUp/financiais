@@ -1,21 +1,36 @@
-import React, { useState, useEffect } from 'react';
-import { CalendarRepeat, Check, ArrowDownCircle, ArrowUpCircle, Landmark, CreditCard as CardIcon } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  CalendarRepeat,
+  Check,
+  ArrowDownCircle,
+  ArrowUpCircle,
+  Landmark,
+  CreditCard as CardIcon,
+  Sparkles,
+  Search,
+  History,
+  Clock,
+  ChevronRight,
+  X,
+} from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { CustomSelect } from '../components/CustomSelect';
 import { useFinancial } from '../context/FinancialContext';
-import { RecurringRule } from '../types';
-import { getTodayDateString } from '../utils/formatters';
+import { RecurringRule, RecurringCandidate, Transaction } from '../types';
+import { getTodayDateString, formatCurrency, formatDate } from '../utils/formatters';
 
 interface RecurringModalProps {
   isOpen: boolean;
   onClose: () => void;
   ruleToEdit: RecurringRule | null;
+  initialCandidate?: RecurringCandidate | null;
 }
 
 export const RecurringModal: React.FC<RecurringModalProps> = ({
   isOpen,
   onClose,
   ruleToEdit,
+  initialCandidate,
 }) => {
   const { accounts, categories, creditCards, refreshAll, showToast } = useFinancial();
 
@@ -34,9 +49,44 @@ export const RecurringModal: React.FC<RecurringModalProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
+  // History matching & recurring pattern states
+  const [candidates, setCandidates] = useState<RecurringCandidate[]>([]);
+  const [matchingTransactions, setMatchingTransactions] = useState<Transaction[]>([]);
+  const [isSearchingHistory, setIsSearchingHistory] = useState(false);
+  const [dismissedSuggestion, setDismissedSuggestion] = useState(false);
+  const [showHistoryPicker, setShowHistoryPicker] = useState(false);
+  const [historySearchQuery, setHistorySearchQuery] = useState('');
+  const [allRecentTransactions, setAllRecentTransactions] = useState<Transaction[]>([]);
+  const searchTimeoutRef = useRef<any>(null);
+
+  // Load smart recurring candidates & recent transactions on open
+  useEffect(() => {
+    if (isOpen && !ruleToEdit) {
+      if (window.electronAPI?.detectRecurringPatterns) {
+        window.electronAPI.detectRecurringPatterns()
+          .then((pats) => {
+            if (Array.isArray(pats)) setCandidates(pats.slice(0, 5));
+          })
+          .catch((err) => console.warn('Could not load recurring patterns:', err));
+      }
+      if (window.electronAPI?.getTransactions) {
+        window.electronAPI.getTransactions({ limit: 25 })
+          .then((txs) => {
+            if (Array.isArray(txs)) setAllRecentTransactions(txs);
+          })
+          .catch((err) => console.warn('Could not load recent txs:', err));
+      }
+    }
+  }, [isOpen, ruleToEdit]);
+
+  // Handle initialization and candidate prefill
   useEffect(() => {
     if (isOpen) {
       setErrorMsg('');
+      setDismissedSuggestion(false);
+      setMatchingTransactions([]);
+      setShowHistoryPicker(false);
+
       if (ruleToEdit) {
         setType(ruleToEdit.type);
         setDescription(ruleToEdit.description);
@@ -50,6 +100,21 @@ export const RecurringModal: React.FC<RecurringModalProps> = ({
         setCategoryId(ruleToEdit.categoryId || '');
         setAutoGenerate(ruleToEdit.autoGenerate);
         setNotes(ruleToEdit.notes || '');
+      } else if (initialCandidate) {
+        // Pre-fill with selected candidate
+        setType('expense');
+        setDescription(initialCandidate.cleanDescription || initialCandidate.rawDescription);
+        setAmountStr(((initialCandidate.averageAmount || 0) / 100).toFixed(2).replace('.', ','));
+        setFrequency(initialCandidate.suggestedFrequency || 'monthly');
+        setBillingDay(initialCandidate.suggestedBillingDay || 5);
+        setStartDate(getTodayDateString());
+        const defAcc = accounts.find(a => a.active);
+        setAccountId(defAcc ? defAcc.id : '');
+        setCreditCardId('');
+        setPaymentMode('account');
+        setCategoryId(initialCandidate.categoryId || '');
+        setAutoGenerate(true);
+        setNotes('Cadastrado automaticamente a partir do histórico.');
       } else {
         setType('expense');
         setDescription('');
@@ -67,7 +132,52 @@ export const RecurringModal: React.FC<RecurringModalProps> = ({
         setNotes('');
       }
     }
-  }, [isOpen, ruleToEdit, accounts, categories]);
+  }, [isOpen, ruleToEdit, initialCandidate, accounts, categories]);
+
+  // Real-time history search when typing description
+  useEffect(() => {
+    if (!isOpen || ruleToEdit || dismissedSuggestion) return;
+
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+
+    const query = description.trim();
+    if (query.length < 3) {
+      setMatchingTransactions([]);
+      return;
+    }
+
+    searchTimeoutRef.current = setTimeout(async () => {
+      try {
+        setIsSearchingHistory(true);
+        if (window.electronAPI?.getTransactions) {
+          const res = await window.electronAPI.getTransactions({
+            search: query,
+            type,
+            limit: 4,
+          });
+          if (Array.isArray(res)) {
+            // Keep unique by description/amount
+            const seen = new Set<string>();
+            const unique = res.filter((tx) => {
+              const key = `${tx.description}-${tx.amount}`;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
+            setMatchingTransactions(unique);
+          }
+        }
+      } catch (err) {
+        console.warn('Error searching history for recurring:', err);
+      } finally {
+        setIsSearchingHistory(false);
+      }
+    }, 280);
+
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [description, type, isOpen, ruleToEdit, dismissedSuggestion]);
 
   const handleAmountChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     let val = e.target.value.replace(/\D/g, '');
@@ -84,6 +194,61 @@ export const RecurringModal: React.FC<RecurringModalProps> = ({
     const clean = amountStr.replace(/\./g, '').replace(',', '.');
     return Math.round(parseFloat(clean) * 100);
   };
+
+  const applyCandidate = (cand: RecurringCandidate) => {
+    setDescription(cand.cleanDescription || cand.rawDescription);
+    setAmountStr(((cand.averageAmount || 0) / 100).toFixed(2).replace('.', ','));
+    setFrequency(cand.suggestedFrequency || 'monthly');
+    setBillingDay(cand.suggestedBillingDay || 5);
+    if (cand.categoryId) {
+      setCategoryId(cand.categoryId);
+    }
+    setDismissedSuggestion(true);
+    setMatchingTransactions([]);
+    showToast(`Preenchido a partir de "${cand.cleanDescription}"!`, 'info');
+  };
+
+  const applyTransaction = (tx: Transaction) => {
+    setDescription(tx.description);
+    setAmountStr(((tx.amount || 0) / 100).toFixed(2).replace('.', ','));
+    if (tx.type === 'expense' || tx.type === 'income') {
+      setType(tx.type);
+    }
+    if (tx.categoryId) {
+      setCategoryId(tx.categoryId);
+    }
+    if (tx.creditCardId) {
+      setPaymentMode('card');
+      setCreditCardId(tx.creditCardId);
+      setAccountId('');
+    } else if (tx.accountId) {
+      setPaymentMode('account');
+      setAccountId(tx.accountId);
+      setCreditCardId('');
+    }
+    if (tx.transactionDate) {
+      const parts = tx.transactionDate.split('-');
+      if (parts.length === 3) {
+        const d = parseInt(parts[2], 10);
+        if (d >= 1 && d <= 31) {
+          setBillingDay(d);
+        }
+      }
+    }
+    setDismissedSuggestion(true);
+    setMatchingTransactions([]);
+    setShowHistoryPicker(false);
+    showToast(`Dados preenchidos a partir de "${tx.description}"!`, 'info');
+  };
+
+  const filteredHistoryList = allRecentTransactions.filter((tx) => {
+    if (!historySearchQuery.trim()) return true;
+    const q = historySearchQuery.toLowerCase();
+    return (
+      tx.description?.toLowerCase().includes(q) ||
+      (tx.amount / 100).toFixed(2).includes(q)
+    );
+  });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -153,6 +318,33 @@ export const RecurringModal: React.FC<RecurringModalProps> = ({
           </div>
         )}
 
+        {/* Smart History Quick Suggestions Bar (when creating new) */}
+        {!ruleToEdit && candidates.length > 0 && (
+          <div className="p-3 bg-brand-500/10 border border-brand-500/25 rounded-xl">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-brand-400 mb-2">
+              <Sparkles className="w-3.5 h-3.5 text-brand-400" />
+              <span>Sugestões detectadas no seu histórico:</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {candidates.map((cand) => (
+                <button
+                  key={cand.id}
+                  type="button"
+                  onClick={() => applyCandidate(cand)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900/90 hover:bg-brand-600 border border-slate-800 hover:border-brand-500 text-slate-300 hover:text-white text-xs transition-all shadow-sm group"
+                >
+                  <span className="font-medium text-white group-hover:text-white">
+                    {cand.cleanDescription}
+                  </span>
+                  <span className="text-[11px] text-brand-400 group-hover:text-brand-100 font-mono">
+                    {formatCurrency(cand.averageAmount)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Type selector */}
         <div className="grid grid-cols-2 gap-2 p-1 bg-slate-950/70 border border-slate-800 rounded-xl">
           <button
@@ -190,18 +382,141 @@ export const RecurringModal: React.FC<RecurringModalProps> = ({
           </button>
         </div>
 
-        <div>
-          <label className="block text-xs font-medium text-slate-400 mb-1.5">
-            Descrição <span className="text-rose-400">*</span>
-          </label>
+        {/* Description + Search from History Picker */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="text-xs font-medium text-slate-400">
+              Descrição <span className="text-rose-400">*</span>
+            </label>
+            {!ruleToEdit && (
+              <button
+                type="button"
+                onClick={() => setShowHistoryPicker(!showHistoryPicker)}
+                className="text-[11px] text-brand-400 hover:text-brand-300 font-medium flex items-center gap-1 transition-colors"
+              >
+                <History className="w-3 h-3" />
+                {showHistoryPicker ? 'Ocultar histórico' : 'Puxar do Histórico...'}
+              </button>
+            )}
+          </div>
+
+          {/* History Search Popover */}
+          {showHistoryPicker && (
+            <div className="p-3 bg-slate-900/90 border border-slate-700/80 rounded-xl space-y-2 mb-2 animate-fadeIn">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Pesquise no seu histórico de lançamentos..."
+                  value={historySearchQuery}
+                  onChange={(e) => setHistorySearchQuery(e.target.value)}
+                  className="w-full bg-slate-950/90 border border-slate-800 rounded-lg pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500"
+                />
+              </div>
+              <div className="max-h-44 overflow-y-auto custom-scrollbar space-y-1">
+                {filteredHistoryList.slice(0, 10).map((tx) => (
+                  <div
+                    key={tx.id}
+                    onClick={() => applyTransaction(tx)}
+                    className="flex items-center justify-between p-2 rounded-lg bg-slate-950/60 hover:bg-slate-800 border border-slate-800/70 hover:border-brand-500/40 cursor-pointer transition-all text-xs"
+                  >
+                    <div className="min-w-0 pr-2">
+                      <div className="font-medium text-white truncate">{tx.description}</div>
+                      <div className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                        <span className="font-mono text-brand-400">{formatCurrency(tx.amount)}</span>
+                        <span>•</span>
+                        <span>{formatDate(tx.transactionDate)}</span>
+                      </div>
+                    </div>
+                    <span className="text-[10px] text-brand-400 font-semibold px-2 py-0.5 rounded bg-brand-500/10 border border-brand-500/20">
+                      Selecionar
+                    </span>
+                  </div>
+                ))}
+                {filteredHistoryList.length === 0 && (
+                  <div className="text-center py-4 text-xs text-slate-500">
+                    Nenhum lançamento encontrado no histórico.
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <input
             type="text"
             placeholder="Ex: Aluguel, Netflix, Salário, Internet..."
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => {
+              setDescription(e.target.value);
+              setDismissedSuggestion(false);
+            }}
             autoFocus
             className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-brand-500"
           />
+
+          {/* Real-time matched transactions suggestion box */}
+          {!dismissedSuggestion && matchingTransactions.length > 0 && (
+            <div className="mt-2 p-3 bg-brand-500/10 border border-brand-500/30 rounded-xl space-y-2 animate-fadeIn">
+              <div className="flex items-center justify-between text-xs font-semibold text-brand-400">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles className="w-3.5 h-3.5 text-brand-400" />
+                  Encontramos no seu histórico ({matchingTransactions.length}):
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setDismissedSuggestion(true)}
+                  className="text-slate-400 hover:text-white p-0.5 rounded"
+                  title="Dispensar sugestão"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                {matchingTransactions.map((tx) => {
+                  const cat = categories.find((c) => c.id === tx.categoryId);
+                  const day = parseInt(tx.transactionDate.split('-')[2] || '1', 10);
+                  return (
+                    <div
+                      key={tx.id}
+                      className="flex items-center justify-between p-2 rounded-lg bg-slate-900/90 border border-slate-800 text-xs"
+                    >
+                      <div className="min-w-0 pr-2">
+                        <div className="font-medium text-white truncate">{tx.description}</div>
+                        <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5 flex-wrap">
+                          <span className="font-mono text-emerald-400 font-semibold">
+                            {formatCurrency(tx.amount)}
+                          </span>
+                          <span>•</span>
+                          <span>Cobrança por volta do dia {day}</span>
+                          {cat && (
+                            <>
+                              <span>•</span>
+                              <span className="inline-flex items-center gap-1">
+                                <span
+                                  className="w-1.5 h-1.5 rounded-full"
+                                  style={{ backgroundColor: cat.color || '#10b981' }}
+                                />
+                                {cat.name}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => applyTransaction(tx)}
+                        className="shrink-0 px-2.5 py-1 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-[11px] font-medium transition-all shadow-sm"
+                      >
+                        ⚡ Preencher
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-4">

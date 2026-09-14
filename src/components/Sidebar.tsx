@@ -49,22 +49,25 @@ export const Sidebar: React.FC = () => {
     <aside className="w-64 bg-slate-950/80 border-r border-slate-850 flex flex-col justify-between select-none shrink-0 h-full backdrop-blur-xl">
       {/* App Branding */}
       <div>
-        <div className="p-6 border-b border-slate-900 flex items-center justify-between">
+        <div className="p-5 border-b border-slate-900 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-600 to-emerald-400 flex items-center justify-center text-white shadow-lg shadow-brand-600/20">
-              <WalletCards className="w-5 h-5" />
-            </div>
+            <img
+              src="/assets/pigo-icon.png"
+              alt="Pigo Logo"
+              className="w-10 h-10 rounded-xl shadow-md object-contain shrink-0"
+            />
             <div>
-              <h1 className="text-base font-bold text-white tracking-tight leading-none">
-                Meu Financeiro
-              </h1>
-              <div className="flex items-center gap-1.5 mt-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-[10px] font-medium text-slate-400 flex items-center gap-1">
-                  <WifiOff className="w-2.5 h-2.5 text-slate-500" />
-                  100% Offline
+              <div className="flex items-center gap-1.5">
+                <h1 className="text-lg font-black text-white tracking-tight leading-none">
+                  PIGO
+                </h1>
+                <span className="text-[10px] uppercase font-bold tracking-widest px-1.5 py-0.5 rounded bg-brand-500/10 text-brand-400 border border-brand-500/20">
+                  App
                 </span>
               </div>
+              <span className="text-[11px] text-slate-400 font-medium block mt-0.5">
+                Finanças Pessoais
+              </span>
             </div>
           </div>
         </div>

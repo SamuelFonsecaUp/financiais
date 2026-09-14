@@ -77,11 +77,11 @@ export const PinLockModal: React.FC = () => {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090d16] p-4">
       <div className="w-full max-w-sm flex flex-col items-center">
-        <div className="w-16 h-16 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400 mb-6 shadow-xl shadow-brand-500/5">
-          <Lock className="w-8 h-8" />
+        <div className="w-16 h-16 rounded-2xl mb-4 shadow-xl overflow-hidden shrink-0 border border-emerald-500/20">
+          <img src="/assets/pigo-icon.png" alt="Pigo Logo" className="w-full h-full object-cover" />
         </div>
 
-        <h2 className="text-xl font-bold text-white mb-1 tracking-tight">Meu Financeiro</h2>
+        <h2 className="text-xl font-black text-white mb-1 tracking-tight">PIGO Finanças</h2>
         <p className="text-sm text-slate-400 mb-8">Digite seu PIN para desbloquear</p>
 
         {/* PIN Dots Indicator */}

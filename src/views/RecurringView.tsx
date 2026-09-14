@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   CalendarClock,
   PlusCircle,
@@ -11,9 +11,10 @@ import {
   ArrowUpCircle,
   CreditCard,
   Landmark,
+  Sparkles,
 } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
-import { RecurringRule } from '../types';
+import { RecurringRule, RecurringCandidate } from '../types';
 import { formatCurrency, formatDate } from '../utils/formatters';
 import { RecurringModal } from './RecurringModal';
 import { ConfirmDialog } from '../components/ConfirmDialog';
@@ -24,8 +25,21 @@ export const RecurringView: React.FC = () => {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<RecurringRule | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<RecurringCandidate | null>(null);
+  const [candidates, setCandidates] = useState<RecurringCandidate[]>([]);
   const [deleteCandidate, setDeleteCandidate] = useState<RecurringRule | null>(null);
   const [filterType, setFilterType] = useState<'all' | 'expense' | 'income'>('all');
+
+  // Load intelligent candidates from past transaction history
+  useEffect(() => {
+    if (window.electronAPI?.detectRecurringPatterns) {
+      window.electronAPI.detectRecurringPatterns()
+        .then((res) => {
+          if (Array.isArray(res)) setCandidates(res);
+        })
+        .catch((err) => console.warn('Could not detect recurring patterns:', err));
+    }
+  }, [recurringRules]);
 
   const filteredRules = recurringRules.filter(r => filterType === 'all' || r.type === filterType);
 
@@ -130,7 +144,7 @@ export const RecurringView: React.FC = () => {
         <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Balanço Fixo Líquido
+              Saldo Livre Previsto
             </span>
             <div className="w-7 h-7 rounded-lg bg-brand-500/10 text-brand-400 flex items-center justify-center">
               <CalendarClock className="w-4 h-4" />
@@ -142,6 +156,73 @@ export const RecurringView: React.FC = () => {
           <span className="text-[11px] text-slate-500">Saldo restante antes de variáveis</span>
         </div>
       </div>
+
+      {/* Intelligent Candidates Detected from History */}
+      {candidates.length > 0 && (
+        <div className="p-5 rounded-2xl bg-gradient-to-r from-brand-950/40 via-slate-900/70 to-slate-900/90 border border-brand-500/30 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-xl bg-brand-500/20 text-brand-400 flex items-center justify-center">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-white">
+                  Lançamentos Recorrentes Detectados no Histórico
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Identificamos gastos recorrentes com base no padrão dos seus extratos anteriores.
+                </p>
+              </div>
+            </div>
+            <span className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-brand-500/15 text-brand-300 border border-brand-500/30 self-start sm:self-auto">
+              {candidates.length} sugestão{candidates.length > 1 ? 'ões' : ''} encontrada{candidates.length > 1 ? 's' : ''}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {candidates.map((cand) => (
+              <div
+                key={cand.id}
+                className="p-4 rounded-xl bg-slate-950/70 border border-slate-800/90 hover:border-brand-500/40 transition-all flex flex-col justify-between space-y-3"
+              >
+                <div>
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="font-semibold text-white text-sm truncate">
+                      {cand.cleanDescription}
+                    </span>
+                    <span className="text-[10px] font-semibold text-brand-400 bg-brand-500/10 px-1.5 py-0.5 rounded border border-brand-500/20">
+                      {cand.confidence}% certeza
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-400 mt-1 flex items-center gap-2">
+                    <span className="font-mono text-emerald-400 font-semibold">
+                      {formatCurrency(cand.averageAmount)}
+                    </span>
+                    <span>•</span>
+                    <span>Todo dia {cand.suggestedBillingDay}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-1">
+                    Detectado em {cand.occurrencesCount} lançamentos anteriores
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedCandidate(cand);
+                    setEditingRule(null);
+                    setModalOpen(true);
+                  }}
+                  className="w-full py-2 px-3 bg-brand-600 hover:bg-brand-500 text-white rounded-lg text-xs font-semibold transition-all shadow-sm flex items-center justify-center gap-1.5 active:scale-95"
+                >
+                  <PlusCircle className="w-3.5 h-3.5" />
+                  Cadastrar como Recorrente
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Rules List */}
       {recurringRules.length === 0 ? (
@@ -301,8 +382,10 @@ export const RecurringView: React.FC = () => {
         onClose={() => {
           setModalOpen(false);
           setEditingRule(null);
+          setSelectedCandidate(null);
         }}
         ruleToEdit={editingRule}
+        initialCandidate={selectedCandidate}
       />
 
       {/* Delete Confirmation */}
