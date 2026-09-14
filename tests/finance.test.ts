@@ -536,4 +536,216 @@ describe('Financial Rules and Core Logic', () => {
     expect(service.getAccountById(bradesco.id).currentBalance).toBe(50000);
     expect(service.getTransactions({ statementId: statement.id }).length).toBe(0);
   });
+
+  it('detects bank metadata, account type and credit card in OFX file', () => {
+    const ofxChecking = `
+      OFXHEADER:100
+      <OFX>
+        <SIGNONMSGSRSV1>
+          <SONRS><FI><ORG>NU PAGAMENTOS S.A.</ORG><FID>260</FID></FI></SONRS>
+        </SIGNONMSGSRSV1>
+        <BANKMSGSRSV1>
+          <STMTTRNRS>
+            <STMTRS>
+              <BANKACCTFROM>
+                <BANKID>260</BANKID>
+                <ACCTID>998877-6</ACCTID>
+                <ACCTTYPE>CHECKING</ACCTTYPE>
+              </BANKACCTFROM>
+              <BANKTRANLIST>
+                <STMTTRN>
+                  <TRNTYPE>DEBIT</TRNTYPE>
+                  <DTPOSTED>20260905120000[-3:BRT]</DTPOSTED>
+                  <TRNAMT>-45.90</TRNAMT>
+                  <FITID>NUBANK-12345</FITID>
+                  <MEMO>Compra Mercado Extra</MEMO>
+                </STMTTRN>
+              </BANKTRANLIST>
+            </STMTRS>
+          </STMTTRNRS>
+        </BANKMSGSRSV1>
+      </OFX>
+    `;
+
+    const checkingResult = service.parseOFX(ofxChecking);
+    expect(checkingResult.length).toBe(1);
+    expect(checkingResult.metadata.bankName).toBe('Nubank');
+    expect(checkingResult.metadata.bankId).toBe('260');
+    expect(checkingResult.metadata.accountId).toBe('998877-6');
+    expect(checkingResult.metadata.isCreditCard).toBe(false);
+
+    const ofxCreditCard = `
+      OFXHEADER:100
+      <OFX>
+        <CREDITCARDMSGSRSV1>
+          <CCSTMTTRNRS>
+            <CCSTMTRS>
+              <BANKID>341</BANKID>
+              <CCACCTINFO><ACCTID>4111-XXXX-XXXX-1234</ACCTID></CCACCTINFO>
+              <BANKTRANLIST>
+                <STMTTRN>
+                  <TRNTYPE>DEBIT</TRNTYPE>
+                  <DTPOSTED>20260906120000</DTPOSTED>
+                  <TRNAMT>-120.00</TRNAMT>
+                  <FITID>ITAU-CARD-1</FITID>
+                  <MEMO>Restaurante Italiano</MEMO>
+                </STMTTRN>
+              </BANKTRANLIST>
+            </CCSTMTRS>
+          </CCSTMTTRNRS>
+        </CREDITCARDMSGSRSV1>
+      </OFX>
+    `;
+
+    const cardResult = service.parseOFX(ofxCreditCard);
+    expect(cardResult.length).toBe(1);
+    expect(cardResult.metadata.bankName).toBe('Itaú');
+    expect(cardResult.metadata.isCreditCard).toBe(true);
+  });
+
+  it('detects internal transfers between user accounts during reconciliation', () => {
+    const itau = service.createAccount({ name: 'Itaú Corrente', initialBalance: 200000 });
+    const nubank = service.createAccount({ name: 'Nubank Corrente', initialBalance: 50000 });
+
+    // Existing transaction on Itaú: user sent Pix of R$ 500,00
+    service.createTransaction({
+      accountId: itau.id,
+      type: 'expense',
+      description: 'PIX ENVIADO SAMUEL',
+      amount: 50000,
+      transactionDate: '2026-09-08',
+      status: 'completed',
+    });
+
+    // Now user imports Nubank statement showing incoming Pix of R$ 500,00 on same date
+    const nubankIncomingItems = [
+      {
+        id: 'temp-1',
+        description: 'PIX RECEBIDO SAMUEL',
+        amount: 50000,
+        transactionDate: '2026-09-08',
+        type: 'income',
+      },
+    ];
+
+    const reconciled = service.reconcileImport({
+      accountId: nubank.id,
+      isCreditCard: false,
+      items: nubankIncomingItems,
+    });
+
+    expect(reconciled.items.length).toBe(1);
+    expect(reconciled.items[0].isPotentialTransfer).toBe(true);
+    expect(reconciled.items[0].suggestedTransferAccountId).toBe(itau.id);
+    expect(reconciled.items[0].suggestedTransferAccountName).toBe('Itaú Corrente');
+  });
+
+  it('correctly credits destination account and debits source account when importing internal transfers', () => {
+    const itau = service.createAccount({ name: 'Itaú Origem', initialBalance: 100000 }); // R$ 1000,00
+    const nubank = service.createAccount({ name: 'Nubank Destino', initialBalance: 50000 }); // R$ 500,00
+
+    // Import a transfer of R$ 300,00 from Itaú to Nubank
+    service.batchImportTransactions({
+      accountId: itau.id,
+      isCreditCard: false,
+      items: [
+        {
+          id: 'tx-transfer-1',
+          description: 'Transferência Pix para Nubank',
+          amount: 30000,
+          transactionDate: '2026-09-10',
+          type: 'transfer',
+          destinationAccountId: nubank.id,
+        },
+      ],
+    });
+
+    const itauUpdated = service.getAccountById(itau.id);
+    const nubankUpdated = service.getAccountById(nubank.id);
+
+    // Itaú: 1000 - 300 = 700 (70.000 cents)
+    expect(itauUpdated.currentBalance).toBe(70000);
+    // Nubank: 500 + 300 = 800 (80.000 cents)
+    expect(nubankUpdated.currentBalance).toBe(80000);
+  });
+
+  it('moves all statement transactions and recalculates accounts balances upon reassignStatementAccount', () => {
+    const accA = service.createAccount({ name: 'Conta A', initialBalance: 100000 });
+    const accB = service.createAccount({ name: 'Conta B', initialBalance: 100000 });
+
+    const stmt = service.saveImportedStatement({
+      originalName: 'extrato_teste.ofx',
+      fileType: 'ofx',
+      content: '<OFX></OFX>',
+      accountId: accA.id,
+    });
+
+    // Import 2 expenses of R$ 150 each into Conta A linked to this statement
+    service.batchImportTransactions({
+      accountId: accA.id,
+      statementId: stmt.id,
+      items: [
+        { id: 'tx-s1', description: 'Item 1', amount: 15000, transactionDate: '2026-09-01', type: 'expense' },
+        { id: 'tx-s2', description: 'Item 2', amount: 15000, transactionDate: '2026-09-02', type: 'expense' },
+      ],
+    });
+
+    // Conta A should be 1000 - 300 = 700
+    expect(service.getAccountById(accA.id).currentBalance).toBe(70000);
+    // Conta B should still be 1000
+    expect(service.getAccountById(accB.id).currentBalance).toBe(100000);
+
+    // Now user reassigns the statement to Conta B
+    const reassignRes = service.reassignStatementAccount({
+      statementId: stmt.id,
+      targetAccountId: accB.id,
+      targetType: 'account',
+    });
+
+    expect(reassignRes.updatedCount).toBe(2);
+
+    // Conta A should be back to 1000 (100.000 cents)
+    expect(service.getAccountById(accA.id).currentBalance).toBe(100000);
+    // Conta B should now have the expenses deducted: 1000 - 300 = 700 (70.000 cents)
+    expect(service.getAccountById(accB.id).currentBalance).toBe(70000);
+  });
+
+  it('updates all statement transactions to new account when updateEntireStatement is passed in updateTransaction', () => {
+    const accA = service.createAccount({ name: 'Conta A', initialBalance: 50000 });
+    const accB = service.createAccount({ name: 'Conta B', initialBalance: 50000 });
+
+    const stmt = service.saveImportedStatement({
+      originalName: 'extrato_bulk.ofx',
+      fileType: 'ofx',
+      content: '<OFX></OFX>',
+      accountId: accA.id,
+    });
+
+    service.batchImportTransactions({
+      accountId: accA.id,
+      statementId: stmt.id,
+      items: [
+        { id: 'tx-b1', description: 'Compra 1', amount: 10000, transactionDate: '2026-09-01', type: 'expense' },
+        { id: 'tx-b2', description: 'Compra 2', amount: 20000, transactionDate: '2026-09-02', type: 'expense' },
+      ],
+    });
+
+    expect(service.getAccountById(accA.id).currentBalance).toBe(20000); // 500 - 300 = 200
+    expect(service.getAccountById(accB.id).currentBalance).toBe(50000);
+
+    // Edit single transaction tx-b1, changing account to accB and setting updateEntireStatement = true
+    service.updateTransaction('tx-b1', {
+      accountId: accB.id,
+      updateEntireStatement: true,
+    });
+
+    // Both transactions should have moved to accB!
+    expect(service.getAccountById(accA.id).currentBalance).toBe(50000);
+    expect(service.getAccountById(accB.id).currentBalance).toBe(20000);
+
+    const tx1 = service.getTransactionById('tx-b1');
+    const tx2 = service.getTransactionById('tx-b2');
+    expect(tx1.accountId).toBe(accB.id);
+    expect(tx2.accountId).toBe(accB.id);
+  });
 });

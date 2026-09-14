@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Minus, Square, Copy, X, RefreshCw, Bell, Printer, FileSpreadsheet } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
+import { SyncStatusBadge } from './SyncStatusBadge';
 
 export const Navbar: React.FC = () => {
   const {
@@ -75,6 +76,8 @@ export const Navbar: React.FC = () => {
             <span>Continuar Importação</span>
           </button>
         )}
+
+        <SyncStatusBadge />
 
         <button
           onClick={() => window.print()}

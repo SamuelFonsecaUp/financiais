@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Wallet,
   TrendingUp,
@@ -12,7 +12,10 @@ import {
   ArrowRightLeft,
   Receipt,
   ChevronRight,
+  Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
+import { FinancialHealthScore } from '../types';
 import {
   ResponsiveContainer,
   BarChart,
@@ -62,6 +65,14 @@ export const DashboardView: React.FC = () => {
     ? Math.round(((monthExpense - prevMonthExpense) / prevMonthExpense) * 100)
     : 0;
 
+  const [healthScore, setHealthScore] = useState<FinancialHealthScore | null>(null);
+
+  useEffect(() => {
+    if (window.electronAPI?.getFinancialHealthScore) {
+      window.electronAPI.getFinancialHealthScore().then(setHealthScore).catch(console.error);
+    }
+  }, []);
+
   const hasAnyData = recentTransactions.length > 0 || totalBalance !== 0;
 
   return (
@@ -96,6 +107,49 @@ export const DashboardView: React.FC = () => {
         />
       ) : (
         <>
+          {/* Local Financial Intelligence & Health Score Banner */}
+          {healthScore && (
+            <div
+              onClick={() => setCurrentView('intelligence')}
+              className="p-5 rounded-2xl bg-gradient-to-r from-slate-900/90 via-brand-950/20 to-slate-900/90 border border-slate-800 hover:border-brand-500/40 shadow-lg cursor-pointer transition-all duration-300 group flex flex-col md:flex-row md:items-center justify-between gap-4"
+            >
+              <div className="flex items-center gap-4">
+                <div className="relative flex items-center justify-center shrink-0">
+                  <div
+                    className="w-14 h-14 rounded-2xl flex flex-col items-center justify-center font-black text-white shadow-inner"
+                    style={{ backgroundColor: `${healthScore.color}25`, border: `2px solid ${healthScore.color}` }}
+                  >
+                    <span className="text-lg leading-none" style={{ color: healthScore.color }}>{healthScore.score}</span>
+                    <span className="text-[9px] text-slate-400 font-bold">SCORE</span>
+                  </div>
+                </div>
+
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-brand-400 flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Inteligência Financeira Local
+                    </span>
+                    <span
+                      className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase"
+                      style={{ backgroundColor: `${healthScore.color}20`, color: healthScore.color }}
+                    >
+                      {healthScore.classification}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-300 mt-1 max-w-2xl leading-relaxed">
+                    {healthScore.message}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-xs font-semibold text-brand-400 group-hover:text-brand-300 transition-colors shrink-0">
+                <span>Ver Análise Completa</span>
+                <ChevronRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
+              </div>
+            </div>
+          )}
+
           {/* Top 4 Financial Summary Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* Saldo Total */}

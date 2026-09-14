@@ -7,6 +7,7 @@ import { PinLockModal } from './components/PinLockModal';
 import { NotificationDrawer } from './components/NotificationDrawer';
 import { TransactionModal } from './views/TransactionModal';
 import { ImportBankModal } from './views/ImportBankModal';
+import { CloudAuthModal } from './views/CloudAuthModal';
 
 import { DashboardView } from './views/DashboardView';
 import { TransactionsView } from './views/TransactionsView';
@@ -21,6 +22,7 @@ import { ReportsView } from './views/ReportsView';
 import { SettingsView } from './views/SettingsView';
 import { OnboardingView } from './views/OnboardingView';
 import { ImportView } from './views/ImportView';
+import { IntelligenceView } from './views/IntelligenceView';
 
 export const App: React.FC = () => {
   const {
@@ -30,6 +32,8 @@ export const App: React.FC = () => {
     isLoading,
     importModalOpen,
     setImportModalOpen,
+    cloudAuthModalOpen,
+    setCloudAuthModalOpen,
   } = useFinancial();
 
   if (isLoading) {
@@ -73,6 +77,12 @@ export const App: React.FC = () => {
         onClose={() => setImportModalOpen(false)}
       />
 
+      {/* Cloud Supabase Sync & Auth Modal */}
+      <CloudAuthModal
+        isOpen={cloudAuthModalOpen}
+        onClose={() => setCloudAuthModalOpen(false)}
+      />
+
       {/* Left Sidebar */}
       <Sidebar />
 
@@ -94,6 +104,7 @@ export const App: React.FC = () => {
             {currentView === 'reports' && <ReportsView />}
             {currentView === 'settings' && <SettingsView />}
             {currentView === 'import' && <ImportView />}
+            {currentView === 'intelligence' && <IntelligenceView />}
           </div>
         </main>
       </div>

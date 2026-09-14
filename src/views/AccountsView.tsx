@@ -12,6 +12,8 @@ import {
   CheckCircle2,
   ArchiveRestore,
   Scale,
+  RefreshCw,
+  ArrowRight,
 } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
 import { Account } from '../types';
@@ -22,12 +24,13 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { EmptyState } from '../components/EmptyState';
 
 export const AccountsView: React.FC = () => {
-  const { accounts, refreshAll, showToast } = useFinancial();
+  const { accounts, refreshAll, showToast, navigateToAccountTransactions } = useFinancial();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [adjustAccount, setAdjustAccount] = useState<Account | null>(null);
   const [deleteCandidate, setDeleteCandidate] = useState<Account | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [isRecalculating, setIsRecalculating] = useState(false);
 
   const activeAccounts = accounts.filter(a => a.active);
   const archivedAccounts = accounts.filter(a => !a.active);
@@ -80,6 +83,25 @@ export const AccountsView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={async () => {
+              setIsRecalculating(true);
+              try {
+                await refreshAll();
+                showToast('Saldos e lançamentos recalculados com sucesso!', 'success');
+              } catch (e: any) {
+                showToast(e.message || 'Erro ao recalcular saldos.', 'error');
+              } finally {
+                setIsRecalculating(false);
+              }
+            }}
+            title="Recalcular e sincronizar saldos de todas as contas"
+            className="flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-850 border border-slate-800 text-slate-300 hover:text-white text-xs font-semibold transition-all shadow-sm"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isRecalculating ? 'animate-spin text-brand-400' : ''}`} />
+            <span>Atualizar Saldos</span>
+          </button>
+
           {archivedAccounts.length > 0 && (
             <button
               onClick={() => setShowArchived(!showArchived)}
@@ -231,8 +253,16 @@ export const AccountsView: React.FC = () => {
 
                 {/* Footer details */}
                 <div className="pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-400">
-                  <span>Saldo inicial: {formatCurrency(account.initialBalance)}</span>
-                  <span>{account.transactionCount || 0} lançamentos</span>
+                  <span>Inicial: {formatCurrency(account.initialBalance)}</span>
+                  <button
+                    type="button"
+                    onClick={() => navigateToAccountTransactions(account.id)}
+                    title={`Ver extrato e lançamentos da conta ${account.name}`}
+                    className="flex items-center gap-1.5 text-brand-400 hover:text-brand-300 font-semibold hover:underline transition-colors group/link"
+                  >
+                    <span>{account.transactionCount || 0} lançamentos</span>
+                    <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover/link:translate-x-0.5" />
+                  </button>
                 </div>
               </div>
             );

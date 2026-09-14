@@ -188,35 +188,47 @@ app.whenReady().then(() => {
         { name: 'Arquivos OFX (*.ofx, *.qfx)', extensions: ['ofx', 'qfx'] },
         { name: 'Planilhas CSV (*.csv)', extensions: ['csv'] },
       ],
-      properties: ['openFile'],
+      properties: ['openFile', 'multiSelections'],
     });
     if (canceled || filePaths.length === 0) return { canceled: true };
-    const filePath = filePaths[0];
-    const fileName = path.basename(filePath);
-    const content = fs.readFileSync(filePath, 'utf8');
-    const isOfx = fileName.toLowerCase().endsWith('.ofx') || fileName.toLowerCase().endsWith('.qfx');
-    const fileType = isOfx ? 'ofx' : 'csv';
 
-    // Automatically store a permanent copy of the bank statement into the app's secure vault folder
-    let savedStatement = null;
-    try {
-      savedStatement = service.saveImportedStatement({
-        originalName: fileName,
+    const files = filePaths.map(filePath => {
+      const fileName = path.basename(filePath);
+      const content = fs.readFileSync(filePath, 'utf8');
+      const isOfx = fileName.toLowerCase().endsWith('.ofx') || fileName.toLowerCase().endsWith('.qfx');
+      const fileType = isOfx ? 'ofx' : 'csv';
+
+      let savedStatement = null;
+      try {
+        savedStatement = service.saveImportedStatement({
+          originalName: fileName,
+          fileType,
+          content,
+        });
+      } catch (err) {
+        logError(err, 'banking:saveImportedStatement');
+      }
+
+      return {
+        filePath,
+        fileName,
         fileType,
         content,
-      });
-    } catch (err) {
-      logError(err, 'banking:saveImportedStatement');
-    }
+        savedStatementId: savedStatement ? savedStatement.id : null,
+        savedPath: savedStatement ? savedStatement.savedPath : null,
+      };
+    });
 
+    const first = files[0];
     return { 
       canceled: false, 
-      filePath, 
-      fileName, 
-      fileType, 
-      content, 
-      savedStatementId: savedStatement ? savedStatement.id : null,
-      savedPath: savedStatement ? savedStatement.savedPath : null,
+      files,
+      filePath: first.filePath, 
+      fileName: files.length > 1 ? `${files.length} arquivos selecionados` : first.fileName, 
+      fileType: first.fileType, 
+      content: first.content, 
+      savedStatementId: first.savedStatementId,
+      savedPath: first.savedPath,
     };
   });
   handleIpc('banking:parseOFX', (content) => service.parseOFX(content));
@@ -226,6 +238,7 @@ app.whenReady().then(() => {
   handleIpc('banking:reassignStatementAccount', (data) => service.reassignStatementAccount(data));
   handleIpc('banking:deleteStatementTransactions', (statementId) => service.deleteStatementTransactions(statementId));
   handleIpc('banking:getSavedStatements', () => service.getImportedStatements());
+  handleIpc('banking:saveStatement', (data) => service.saveImportedStatement(data));
   handleIpc('banking:updateStatementStats', (id, data) => service.updateImportedStatementStats(id, data));
   handleIpc('banking:openStatementsFolder', async () => {
     const folderPath = service.getStatementsFolderPath();
@@ -252,6 +265,28 @@ app.whenReady().then(() => {
   // Dashboard & Reports
   handleIpc('dashboard:get', () => service.getDashboardData());
   handleIpc('reports:get', (filters) => service.getReports(filters));
+
+  // Financial Intelligence Engine (100% Local & Offline)
+  handleIpc('intelligence:getOverview', () => service.getIntelligenceOverview());
+  handleIpc('intelligence:getHealthScore', (targetDate) => service.getFinancialHealthScore(targetDate));
+  handleIpc('intelligence:getForecast', (daysAhead) => service.getBalanceForecast(daysAhead));
+  handleIpc('intelligence:getInsights', (targetMonthKey) => service.getSmartInsights(targetMonthKey));
+  handleIpc('intelligence:getAnomalies', (monthsBack) => service.detectAnomalies(monthsBack));
+  handleIpc('intelligence:suggestCategory', (description, amount) => service.suggestCategory(description, amount));
+  handleIpc('intelligence:detectRecurring', () => service.detectRecurringPatterns());
+  handleIpc('intelligence:getCardAnalysis', () => service.getCreditCardIntelligence());
+  handleIpc('intelligence:getGoals', () => service.getGoalsIntelligence());
+  handleIpc('intelligence:getMonthlyCloseout', (yearMonth) => service.getMonthlyCloseout(yearMonth));
+  handleIpc('intelligence:convertRecurring', (candidate) => service.convertCandidateToRecurring(candidate));
+
+  // Cloud Auth & Sync (Supabase / Local-First)
+  handleIpc('cloud:getSession', () => service.getCloudSession());
+  handleIpc('cloud:signIn', (email, password, config) => service.cloudSignIn(email, password, config));
+  handleIpc('cloud:signUp', (email, password, config) => service.cloudSignUp(email, password, config));
+  handleIpc('cloud:signOut', () => service.cloudSignOut());
+  handleIpc('cloud:updateConfig', (supabaseUrl, supabaseAnonKey) => service.updateCloudConfig(supabaseUrl, supabaseAnonKey));
+  handleIpc('cloud:sync', () => service.triggerCloudSync());
+  handleIpc('cloud:fullPull', () => service.cloudFullPull());
 
   // Backup & Restore Dialogs
   handleIpc('backup:export', async () => {

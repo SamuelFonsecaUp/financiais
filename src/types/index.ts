@@ -179,6 +179,26 @@ export interface ImportReconciledItem {
   checkNum?: string | null;
   refNum?: string | null;
   trnType?: string | null;
+  ofxBankId?: string | null;
+  ofxBankName?: string | null;
+  ofxAccountId?: string | null;
+  ofxIsCreditCard?: boolean;
+  metadata?: {
+    bankId?: string | null;
+    bankName?: string | null;
+    org?: string | null;
+    accountId?: string | null;
+    branchId?: string | null;
+    acctType?: string | null;
+    isCreditCard?: boolean;
+  };
+  isPotentialTransfer?: boolean;
+  suggestedTransferAccountId?: string | null;
+  suggestedTransferAccountName?: string | null;
+  targetAccountId?: string;
+  targetType?: 'account' | 'card';
+  destinationAccountId?: string | null;
+  isTransfer?: boolean;
 }
 
 export interface PendingImportSession {
@@ -413,6 +433,182 @@ export interface ReportsData {
   }[];
 }
 
+// --- FINANCIAL INTELLIGENCE INTERFACES ---
+export interface HealthPillar {
+  id: 'savings' | 'recurring' | 'debt' | 'reserve' | 'discipline';
+  name: string;
+  score: number;
+  maxScore: number;
+  weight: number;
+  status: 'excellent' | 'good' | 'warning';
+  diagnostic: string;
+}
+
+export interface FinancialHealthScore {
+  score: number;
+  classification: 'Excelente' | 'Boa' | 'Atenção' | 'Crítica';
+  color: string;
+  message: string;
+  calculatedAt: string;
+  metrics: {
+    effectiveIncome: number;
+    effectiveExpense: number;
+    savingsRate: number;
+    recurringTotal: number;
+    totalLiquidBalance: number;
+    reserveCoverageMonths: number;
+  };
+  pillars: HealthPillar[];
+}
+
+export interface DailyForecastEvent {
+  title: string;
+  amount: number;
+  type: string;
+}
+
+export interface DailyForecastPoint {
+  date: string;
+  balance: number;
+  delta: number;
+  eventsCount: number;
+  events: DailyForecastEvent[];
+}
+
+export interface BalanceForecast {
+  daysAhead: number;
+  startDate: string;
+  endDate: string;
+  currentBalance: number;
+  finalBalance: number;
+  minBalance: number;
+  minBalanceDate: string;
+  maxBalance: number;
+  alertUnderZero: boolean;
+  firstNegativeDate?: string | null;
+  dailyTrajectory: DailyForecastPoint[];
+}
+
+export interface SmartInsight {
+  id: string;
+  type: 'warning' | 'tip' | 'danger' | 'success';
+  category: string;
+  title: string;
+  description: string;
+  metric?: string;
+  actionSuggestion?: string;
+}
+
+export interface AnomalyItem {
+  id: string;
+  transactionId: string;
+  description: string;
+  amount: number;
+  date: string;
+  categoryName: string;
+  anomalyType: 'statistical_outlier' | 'duplicate_charge';
+  severity: 'high' | 'medium';
+  reason: string;
+}
+
+export interface CategorySuggestion {
+  categoryId: string;
+  categoryName: string;
+  confidence: number;
+  source: 'rule' | 'history';
+}
+
+export interface RecurringCandidate {
+  id: string;
+  rawDescription: string;
+  cleanDescription: string;
+  averageAmount: number;
+  suggestedFrequency: 'monthly' | 'weekly';
+  suggestedBillingDay: number;
+  occurrencesCount: number;
+  lastDate: string;
+  nextExpectedDate: string;
+  categoryId?: string | null;
+  confidence: number;
+}
+
+export interface CardIntelligenceData {
+  cardId: string;
+  cardName: string;
+  color: string;
+  creditLimit: number;
+  currentInvoice: number;
+  nextInvoice: number;
+  currentUtilization: number;
+  closingDay: number;
+  dueDay: number;
+  monthlyProjections: {
+    monthKey: string;
+    amount: number;
+    itemCount: number;
+  }[];
+  endingInstallments: {
+    description: string;
+    amount: number;
+    endsInMonth: string;
+  }[];
+}
+
+export interface GoalIntelligence {
+  id: string;
+  name: string;
+  targetAmount: number;
+  currentAmount: number;
+  remainingAmount: number;
+  progressPercent: number;
+  color: string;
+  icon: string;
+  targetDate?: string;
+  estimatedCompletionDate?: string | null;
+  estimatedMonthsToFinish?: number | null;
+  requiredMonthlyAporte?: number | null;
+  status: 'completed' | 'on_track' | 'at_risk';
+}
+
+export interface MonthlyCloseoutReport {
+  monthKey: string;
+  incomeTotal: number;
+  incomeCount: number;
+  expenseTotal: number;
+  expenseCount: number;
+  savedAmount: number;
+  savingsRate: number;
+  incomeChangeMoM: number;
+  expenseChangeMoM: number;
+  topCategories: {
+    id: string;
+    name: string;
+    color: string;
+    icon: string;
+    total: number;
+    count: number;
+    percentage: number;
+  }[];
+  highestExpense?: {
+    description: string;
+    amount: number;
+    date: string;
+    categoryName: string;
+  } | null;
+  achievements: string[];
+}
+
+export interface IntelligenceOverviewData {
+  healthScore: FinancialHealthScore;
+  forecast: BalanceForecast;
+  insights: SmartInsight[];
+  anomalies: AnomalyItem[];
+  recurringCandidates: RecurringCandidate[];
+  cardsAnalysis: CardIntelligenceData[];
+  goals: GoalIntelligence[];
+  monthlyCloseout: MonthlyCloseoutReport;
+}
+
 export interface ElectronAPI {
   minimizeWindow: () => Promise<void>;
   maximizeWindow: () => Promise<boolean>;
@@ -503,6 +699,7 @@ export interface ElectronAPI {
   reassignStatementAccount: (data: { statementId: string; targetAccountId: string; targetType?: 'account' | 'card' }) => Promise<{ success: boolean; updatedCount: number; statementId: string }>;
   deleteStatementTransactions: (statementId: string) => Promise<{ success: boolean; deletedCount: number }>;
   getSavedStatements: () => Promise<ImportedStatement[]>;
+  saveImportedStatement: (data: { originalName: string; fileType: 'ofx' | 'csv'; content: string; accountId?: string | null; cardId?: string | null }) => Promise<{ id: string; fileName: string; savedPath: string }>;
   openStatementsFolder: () => Promise<string>;
   updateStatementStats: (id: string, data: { itemsCount?: number; accountId?: string; cardId?: string }) => Promise<void>;
 
@@ -524,12 +721,54 @@ export interface ElectronAPI {
   getDashboardData: () => Promise<DashboardData>;
   getReports: (filters?: any) => Promise<ReportsData>;
 
+  // Financial Intelligence Engine (100% Local & Offline)
+  getIntelligenceOverview: () => Promise<IntelligenceOverviewData>;
+  getFinancialHealthScore: (targetDate?: string) => Promise<FinancialHealthScore>;
+  getBalanceForecast: (daysAhead?: number) => Promise<BalanceForecast>;
+  getSmartInsights: (targetMonthKey?: string) => Promise<SmartInsight[]>;
+  detectAnomalies: (monthsBack?: number) => Promise<AnomalyItem[]>;
+  suggestCategory: (description: string, amount?: number) => Promise<CategorySuggestion | null>;
+  detectRecurringPatterns: () => Promise<RecurringCandidate[]>;
+  getCreditCardIntelligence: () => Promise<CardIntelligenceData[]>;
+  getGoalsIntelligence: () => Promise<GoalIntelligence[]>;
+  getMonthlyCloseout: (yearMonth?: string) => Promise<MonthlyCloseoutReport>;
+  convertCandidateToRecurring: (candidate: any) => Promise<{ success: boolean; id: string }>;
+
+  // Cloud Auth & Sync (Supabase / Local-First)
+  getCloudSession: () => Promise<CloudSession>;
+  cloudSignIn: (email: string, password: string, config?: any) => Promise<any>;
+  cloudSignUp: (email: string, password: string, config?: any) => Promise<any>;
+  cloudSignOut: () => Promise<{ success: boolean }>;
+  updateCloudConfig: (supabaseUrl: string, supabaseAnonKey: string) => Promise<CloudSession>;
+  triggerCloudSync: () => Promise<SyncResult>;
+  cloudFullPull: () => Promise<{ success: boolean; totalRestored: number; timestamp: string }>;
+
   exportBackupDialog: () => Promise<{ success: boolean; filePath?: string; canceled?: boolean }>;
   restoreBackupDialog: () => Promise<{ success: boolean; canceled?: boolean }>;
   exportCsvDialog: (filters?: any) => Promise<{ success: boolean; filePath?: string; canceled?: boolean }>;
 
   seedDemoData: () => Promise<boolean>;
   clearDemoData: () => Promise<boolean>;
+}
+
+export interface CloudSession {
+  userId: string | null;
+  email: string | null;
+  accessToken?: string | null;
+  refreshToken?: string | null;
+  supabaseUrl: string;
+  supabaseAnonKey: string;
+  lastSyncAt: string | null;
+  syncEnabled: boolean;
+}
+
+export interface SyncResult {
+  status: 'synced' | 'offline' | 'local_only' | 'syncing' | 'error';
+  message?: string;
+  pushedCount?: number;
+  pulledCount?: number;
+  lastSyncAt?: string | null;
+  timestamp?: string;
 }
 
 declare global {

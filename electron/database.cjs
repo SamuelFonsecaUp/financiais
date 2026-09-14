@@ -189,6 +189,26 @@ function initDatabase(customPath = null) {
       card_id TEXT,
       items_count INTEGER DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS sync_metadata (
+      table_name TEXT PRIMARY KEY,
+      last_synced_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS cloud_session (
+      id TEXT PRIMARY KEY DEFAULT 'current_session',
+      user_id TEXT,
+      email TEXT,
+      access_token TEXT,
+      refresh_token TEXT,
+      expires_at INTEGER,
+      supabase_url TEXT,
+      supabase_anon_key TEXT,
+      last_sync_at TEXT,
+      sync_enabled INTEGER DEFAULT 1,
+      created_at TEXT,
+      updated_at TEXT
+    );
   `);
 
   // 1. Migrations for existing DB instances (run BEFORE indexes that depend on them)
@@ -200,6 +220,46 @@ function initDatabase(customPath = null) {
     `ALTER TABLE recurring_rules ADD COLUMN auto_generate INTEGER DEFAULT 1`,
     `ALTER TABLE recurring_rules ADD COLUMN notes TEXT`,
     `ALTER TABLE transactions ADD COLUMN statement_id TEXT`,
+
+    // Offline-First / Cloud Sync Columns
+    `ALTER TABLE accounts ADD COLUMN user_id TEXT`,
+    `ALTER TABLE accounts ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE accounts ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
+
+    `ALTER TABLE categories ADD COLUMN user_id TEXT`,
+    `ALTER TABLE categories ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE categories ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE categories ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
+
+    `ALTER TABLE credit_cards ADD COLUMN user_id TEXT`,
+    `ALTER TABLE credit_cards ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE credit_cards ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
+
+    `ALTER TABLE transactions ADD COLUMN user_id TEXT`,
+    `ALTER TABLE transactions ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE transactions ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
+
+    `ALTER TABLE recurring_rules ADD COLUMN user_id TEXT`,
+    `ALTER TABLE recurring_rules ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE recurring_rules ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE recurring_rules ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
+
+    `ALTER TABLE goals ADD COLUMN user_id TEXT`,
+    `ALTER TABLE goals ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE goals ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
+
+    `ALTER TABLE category_budgets ADD COLUMN user_id TEXT`,
+    `ALTER TABLE category_budgets ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE category_budgets ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
+
+    `ALTER TABLE import_rules ADD COLUMN user_id TEXT`,
+    `ALTER TABLE import_rules ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE import_rules ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
+
+    `ALTER TABLE imported_statements ADD COLUMN user_id TEXT`,
+    `ALTER TABLE imported_statements ADD COLUMN updated_at TEXT`,
+    `ALTER TABLE imported_statements ADD COLUMN deleted_at TEXT`,
+    `ALTER TABLE imported_statements ADD COLUMN sync_status TEXT DEFAULT 'pending'`,
   ];
   for (const m of migrations) {
     try { db.exec(m); } catch (e) {}

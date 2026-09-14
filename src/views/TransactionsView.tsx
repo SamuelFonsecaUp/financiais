@@ -25,6 +25,7 @@ import { EmptyState } from '../components/EmptyState';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { CustomSelect } from '../components/CustomSelect';
 import { Modal } from '../components/Modal';
+import { useFinancial } from '../context/FinancialContext';
 
 export const TransactionsView: React.FC = () => {
   const {
@@ -37,6 +38,9 @@ export const TransactionsView: React.FC = () => {
     setCurrentView,
     refreshAll,
     showToast,
+    transactionModalOpen,
+    filterAccountId,
+    setFilterAccountId,
   } = useFinancial();
 
   const [transactions, setTransactions] = useState<Transaction[]>([]);
@@ -54,6 +58,17 @@ export const TransactionsView: React.FC = () => {
   const [selectedType, setSelectedType] = useState('');
   const [selectedStatus, setSelectedStatus] = useState('');
   const [selectedStatement, setSelectedStatement] = useState('');
+
+  // Handle incoming account filter from AccountsView
+  useEffect(() => {
+    if (filterAccountId) {
+      setSelectedAccount(filterAccountId);
+      setPeriod('all');
+      setSelectedCard('');
+      setSelectedStatement('');
+      setFilterAccountId(null);
+    }
+  }, [filterAccountId, setFilterAccountId]);
 
   // Statements vault info
   const [statements, setStatements] = useState<ImportedStatement[]>([]);
@@ -271,6 +286,23 @@ export const TransactionsView: React.FC = () => {
     selectedTag,
     selectedStatement,
   ]);
+
+  // Reactive reload when transaction modal closes or update event fires
+  useEffect(() => {
+    if (!transactionModalOpen) {
+      loadTransactions();
+      loadStatements();
+    }
+  }, [transactionModalOpen]);
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      loadTransactions();
+      loadStatements();
+    };
+    window.addEventListener('finance:transactionsUpdated', handleUpdate);
+    return () => window.removeEventListener('finance:transactionsUpdated', handleUpdate);
+  }, []);
 
   const handleDuplicate = async (tx: Transaction) => {
     try {

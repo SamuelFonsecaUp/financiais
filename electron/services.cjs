@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const { getDatabase } = require('./database.cjs');
 const { hashPin, verifyPin, generateSalt } = require('./crypto.cjs');
+const { FinancialIntelligenceEngine } = require('./intelligenceEngine.cjs');
+const { CloudAuth } = require('./cloudAuth.cjs');
+const { CloudSyncEngine } = require('./syncEngine.cjs');
 
 // Helper to format ISO date to YYYY-MM
 function getMonthKey(dateStr) {
@@ -51,10 +54,36 @@ function calculateInvoiceMonth(transactionDate, closingDay) {
 class FinancialService {
   constructor(db = null) {
     this._db = db;
+    try {
+      this.repairOrphanStatementTransactions();
+    } catch (e) {
+      console.error('[FinancialService] Error during auto-repair:', e);
+    }
   }
 
   get db() {
     return this._db || getDatabase();
+  }
+
+  get intelligence() {
+    if (!this._intelligence) {
+      this._intelligence = new FinancialIntelligenceEngine(this.db);
+    }
+    return this._intelligence;
+  }
+
+  get cloudAuth() {
+    if (!this._cloudAuth) {
+      this._cloudAuth = new CloudAuth(this.db);
+    }
+    return this._cloudAuth;
+  }
+
+  get syncEngine() {
+    if (!this._syncEngine) {
+      this._syncEngine = new CloudSyncEngine(this.db, this.cloudAuth);
+    }
+    return this._syncEngine;
   }
 
   // --- SETTINGS ---
@@ -740,11 +769,65 @@ class FinancialService {
   }
 
   getTransactionById(id) {
-    const list = this.getTransactions({ limit: 1 });
-    const row = this.db.prepare(`SELECT id FROM transactions WHERE id = ?`).get(id);
-    if (!row) return null;
-    const singleList = this.getTransactions({ search: '' });
-    return singleList.find(t => t.id === id) || null;
+    const query = `
+      SELECT 
+        t.*,
+        a.name as account_name,
+        a.color as account_color,
+        da.name as destination_account_name,
+        da.color as destination_account_color,
+        c.name as category_name,
+        c.color as category_color,
+        c.icon as category_icon,
+        cc.name as credit_card_name,
+        cc.color as credit_card_color,
+        s.original_name as statement_original_name,
+        s.file_name as statement_file_name
+      FROM transactions t
+      LEFT JOIN accounts a ON t.account_id = a.id
+      LEFT JOIN accounts da ON t.destination_account_id = da.id
+      LEFT JOIN categories c ON t.category_id = c.id
+      LEFT JOIN credit_cards cc ON t.credit_card_id = cc.id
+      LEFT JOIN imported_statements s ON t.statement_id = s.id
+      WHERE t.id = ?
+      LIMIT 1
+    `;
+    const r = this.db.prepare(query).get(id);
+    if (!r) return null;
+    return {
+      id: r.id,
+      accountId: r.account_id,
+      accountName: r.account_name,
+      accountColor: r.account_color,
+      destinationAccountId: r.destination_account_id,
+      destinationAccountName: r.destination_account_name,
+      destinationAccountColor: r.destination_account_color,
+      categoryId: r.category_id,
+      categoryName: r.category_name,
+      categoryColor: r.category_color,
+      categoryIcon: r.category_icon,
+      creditCardId: r.credit_card_id,
+      creditCardName: r.credit_card_name,
+      creditCardColor: r.credit_card_color,
+      statementId: r.statement_id,
+      statementOriginalName: r.statement_original_name,
+      statementFileName: r.statement_file_name,
+      type: r.type,
+      description: r.description,
+      amount: r.amount,
+      transactionDate: r.transaction_date,
+      invoiceMonth: r.invoice_month,
+      status: r.status,
+      notes: r.notes,
+      tags: r.tags,
+      recurringId: r.recurring_id,
+      installmentId: r.installment_id,
+      installmentNumber: r.installment_number,
+      totalInstallments: r.total_installments,
+      isDemo: Boolean(r.is_demo),
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    };
   }
 
   createTransaction(data) {
@@ -940,6 +1023,19 @@ class FinancialService {
       now,
       id
     );
+
+    // If user requested to apply account change to all transactions of this imported statement
+    if (data.updateEntireStatement && existing.statementId) {
+      const targetType = creditCardId ? 'card' : 'account';
+      const targetAccountId = creditCardId || accountId;
+      if (targetAccountId) {
+        this.reassignStatementAccount({
+          statementId: existing.statementId,
+          targetAccountId,
+          targetType,
+        });
+      }
+    }
 
     return this.getTransactionById(id);
   }
@@ -1634,6 +1730,68 @@ class FinancialService {
       return m ? m[1].trim() : '';
     };
 
+    // Extract top-level OFX bank and account metadata
+    const extractGlobalTag = (tag) => {
+      const tagRegex = new RegExp(`<${tag}>([^<\\r\\n]+)`, 'i');
+      const m = content.match(tagRegex);
+      return m ? m[1].trim() : '';
+    };
+
+    const bankId = extractGlobalTag('BANKID');
+    const branchId = extractGlobalTag('BRANCHID');
+    const acctId = extractGlobalTag('ACCTID');
+    const acctType = extractGlobalTag('ACCTTYPE');
+    const org = extractGlobalTag('ORG');
+    const fid = extractGlobalTag('FID');
+
+    const isCreditCard = /<CREDITCARDMSGSRSV1>|<CCSTMTTRNRS>|<CCACCTINFO>/i.test(content);
+
+    const BANK_NAMES = {
+      '260': 'Nubank',
+      '341': 'Itaú',
+      '033': 'Santander',
+      '237': 'Bradesco',
+      '001': 'Banco do Brasil',
+      '104': 'Caixa Econômica',
+      '077': 'Banco Inter',
+      '290': 'PagBank',
+      '380': 'PicPay',
+      '212': 'Banco Original',
+      '336': 'C6 Bank',
+      '655': 'Banco Neon',
+      '756': 'Sicoob',
+      '748': 'Sicredi',
+      '422': 'Banco Safra',
+      '041': 'Banrisul',
+      '318': 'BMG',
+    };
+
+    let bankName = BANK_NAMES[bankId] || null;
+    if (!bankName && org) {
+      const upperOrg = org.toUpperCase();
+      if (upperOrg.includes('NU PAGAMENTOS') || upperOrg.includes('NUBANK')) bankName = 'Nubank';
+      else if (upperOrg.includes('ITAU') || upperOrg.includes('ITAÚ')) bankName = 'Itaú';
+      else if (upperOrg.includes('BRADESCO')) bankName = 'Bradesco';
+      else if (upperOrg.includes('SANTANDER')) bankName = 'Santander';
+      else if (upperOrg.includes('INTER')) bankName = 'Inter';
+      else if (upperOrg.includes('CAIXA')) bankName = 'Caixa Econômica';
+      else if (upperOrg.includes('BRASIL')) bankName = 'Banco do Brasil';
+      else if (upperOrg.includes('C6')) bankName = 'C6 Bank';
+      else if (upperOrg.includes('PAGBANK') || upperOrg.includes('PAGSEGURO')) bankName = 'PagBank';
+      else if (upperOrg.includes('PICPAY')) bankName = 'PicPay';
+      else bankName = org;
+    }
+
+    const metadata = {
+      bankId: bankId || null,
+      bankName: bankName || null,
+      org: org || null,
+      accountId: acctId || null,
+      branchId: branchId || null,
+      acctType: acctType || null,
+      isCreditCard,
+    };
+
     for (const block of blocks) {
       const trnType = extractTag(block, 'TRNTYPE');
       const dtPostedRaw = extractTag(block, 'DTPOSTED');
@@ -1681,9 +1839,15 @@ class FinancialService {
         checkNum: checkNum || null,
         refNum: refNum || null,
         trnType: trnType || null,
+        ofxBankId: bankId || null,
+        ofxBankName: bankName || null,
+        ofxAccountId: acctId || null,
+        ofxIsCreditCard: isCreditCard,
+        metadata,
       });
     }
 
+    transactions.metadata = metadata;
     return transactions;
   }
 
@@ -1981,6 +2145,39 @@ class FinancialService {
         if (cat) suggestedCatName = cat.name;
       }
 
+      // 3. Potential Internal Transfer Detection
+      let isPotentialTransfer = false;
+      let suggestedTransferAccountId = null;
+      let suggestedTransferAccountName = null;
+
+      const isTransferKeyword = /\b(PIX|TRANSF|TRANSFERENCIA|TED|DOC|TEF)\b/i.test(upperDesc) ||
+                                /\b(PIX|TRANSF|TRANSFERENCIA|TED|DOC|TEF)\b/i.test(upperOrigin);
+
+      if (isTransferKeyword && !isCreditCard && accountId) {
+        const targetType = item.type === 'expense' ? 'income' : 'expense';
+        const matchTransfer = this.db.prepare(`
+          SELECT t.id, t.account_id, a.name as account_name
+          FROM transactions t
+          JOIN accounts a ON t.account_id = a.id
+          WHERE t.account_id != ?
+            AND t.amount = ?
+            AND (t.type = ? OR t.type = 'transfer')
+            AND t.status != 'cancelled'
+            AND (
+              t.transaction_date = ? OR
+              t.transaction_date = date(?, '+1 day') OR
+              t.transaction_date = date(?, '-1 day')
+            )
+          LIMIT 1
+        `).get(accountId, item.amount, targetType, item.transactionDate, item.transactionDate, item.transactionDate);
+
+        if (matchTransfer) {
+          isPotentialTransfer = true;
+          suggestedTransferAccountId = matchTransfer.account_id;
+          suggestedTransferAccountName = matchTransfer.account_name;
+        }
+      }
+
       return {
         ...item,
         originalDescription: item.originalDescription || item.description,
@@ -1991,6 +2188,9 @@ class FinancialService {
         categoryName: suggestedCatName,
         isAutoCategorized,
         matchedRuleId: matchedRule ? matchedRule.id : null,
+        isPotentialTransfer,
+        suggestedTransferAccountId,
+        suggestedTransferAccountName,
       };
     });
 
@@ -2055,10 +2255,10 @@ class FinancialService {
 
     const insertStmt = this.db.prepare(`
       INSERT INTO transactions (
-        id, account_id, credit_card_id, category_id, type, description, amount, 
+        id, account_id, destination_account_id, credit_card_id, category_id, type, description, amount, 
         transaction_date, invoice_month, status, tags, fit_id, origin, statement_id, is_demo, created_at, updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'importado', ?, ?, ?, 0, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'completed', 'importado', ?, ?, ?, 0, ?, ?)
     `);
 
     const now = new Date().toISOString();
@@ -2067,9 +2267,26 @@ class FinancialService {
 
     const runBatch = this.db.transaction(() => {
       for (const item of items) {
+        // Support item-level account/card override
+        const itemTargetType = item.targetType || (item.isCreditCard ? 'card' : (isCreditCard ? 'card' : 'account'));
+        const itemTargetId = item.targetAccountId || accountId;
+        const itemIsCard = itemTargetType === 'card';
+
+        const itemAccountId = itemIsCard ? null : itemTargetId;
+        const itemCardId = itemIsCard ? itemTargetId : null;
+        const itemDestAccountId = item.destinationAccountId || item.suggestedTransferAccountId || null;
+        const itemType = itemDestAccountId ? 'transfer' : (item.type || 'expense');
+
         let invoiceMonth = null;
-        if (isCreditCard && closingDay) {
-          invoiceMonth = calculateInvoiceMonth(item.transactionDate, closingDay);
+        if (itemIsCard) {
+          let itemClosing = closingDay;
+          if (!itemClosing && itemCardId) {
+            const card = this.getCreditCardById(itemCardId);
+            if (card) itemClosing = card.closingDay;
+          }
+          if (itemClosing) {
+            invoiceMonth = calculateInvoiceMonth(item.transactionDate, itemClosing);
+          }
         }
 
         const origin = item.origin || this.normalizeMerchant(item.description);
@@ -2077,10 +2294,11 @@ class FinancialService {
 
         insertStmt.run(
           item.id || crypto.randomUUID(),
-          isCreditCard ? null : accountId,
-          isCreditCard ? accountId : null,
-          item.categoryId || null,
-          item.type || 'expense',
+          itemAccountId,
+          itemDestAccountId,
+          itemCardId,
+          itemType === 'transfer' ? null : (item.categoryId || null),
+          itemType,
           finalDesc,
           item.amount,
           item.transactionDate,
@@ -2093,7 +2311,7 @@ class FinancialService {
         );
         importedCount++;
 
-        if (saveRules && origin && item.categoryId && origin !== 'OUTROS') {
+        if (saveRules && origin && item.categoryId && origin !== 'OUTROS' && itemType !== 'transfer') {
           learnedPatterns.set(origin.toUpperCase(), item.categoryId);
         }
       }
@@ -2173,6 +2391,84 @@ class FinancialService {
       success: true,
       deletedCount: count,
     };
+  }
+
+  repairOrphanStatementTransactions() {
+    try {
+      const orphanRow = this.db.prepare(`
+        SELECT COUNT(*) as c FROM transactions 
+        WHERE statement_id IS NULL AND (fit_id IS NOT NULL OR tags LIKE '%importado%')
+      `).get();
+
+      if (!orphanRow || orphanRow.c === 0) return 0;
+
+      const statements = this.db.prepare(`SELECT * FROM imported_statements ORDER BY imported_at ASC`).all();
+      if (!statements || statements.length === 0) return 0;
+
+      const folderPath = this.getStatementsFolderPath();
+      let totalRepaired = 0;
+
+      for (const stmt of statements) {
+        let content = null;
+        if (stmt.saved_path && fs.existsSync(stmt.saved_path)) {
+          content = fs.readFileSync(stmt.saved_path, 'utf8');
+        } else {
+          const fallbackPath = path.join(folderPath, stmt.file_name);
+          if (fs.existsSync(fallbackPath)) {
+            content = fs.readFileSync(fallbackPath, 'utf8');
+          }
+        }
+
+        if (!content) continue;
+
+        let fitIds = [];
+        if (stmt.file_type === 'ofx') {
+          try {
+            const parsed = this.parseOFX(content);
+            fitIds = parsed.map(p => p.fitId).filter(Boolean);
+          } catch (e) {}
+        } else if (stmt.file_type === 'csv') {
+          try {
+            const parsed = this.parseCSV(content);
+            fitIds = (parsed.items || []).map(p => p.fitId).filter(Boolean);
+          } catch (e) {}
+        }
+
+        if (fitIds.length > 0) {
+          const placeholders = fitIds.map(() => '?').join(',');
+          const updateResult = this.db.prepare(`
+            UPDATE transactions 
+            SET statement_id = ? 
+            WHERE statement_id IS NULL AND fit_id IN (${placeholders})
+          `).run(stmt.id, ...fitIds);
+
+          if (updateResult.changes > 0) {
+            totalRepaired += updateResult.changes;
+            const sampleTx = this.db.prepare(`SELECT account_id, credit_card_id FROM transactions WHERE statement_id = ? LIMIT 1`).get(stmt.id);
+            const txCountRow = this.db.prepare(`SELECT COUNT(*) as c FROM transactions WHERE statement_id = ?`).get(stmt.id);
+            const currentTxCount = txCountRow ? txCountRow.c : updateResult.changes;
+            
+            this.db.prepare(`
+              UPDATE imported_statements 
+              SET items_count = ?, 
+                  account_id = COALESCE(account_id, ?), 
+                  card_id = COALESCE(card_id, ?)
+              WHERE id = ?
+            `).run(
+              currentTxCount,
+              sampleTx?.account_id || null,
+              sampleTx?.credit_card_id || null,
+              stmt.id
+            );
+          }
+        }
+      }
+
+      return totalRepaired;
+    } catch (err) {
+      console.error('[Repair] Error repairing orphan statement transactions:', err);
+      return 0;
+    }
   }
 
   // --- BANK STATEMENT VAULT (OFX/CSV ARCHIVE) ---
@@ -3013,6 +3309,80 @@ class FinancialService {
     });
     runClear();
     return true;
+  }
+
+  // --- FINANCIAL INTELLIGENCE LAYER (100% OFFLINE) ---
+  getIntelligenceOverview() {
+    return this.intelligence.getIntelligenceOverview();
+  }
+
+  getFinancialHealthScore(targetDate = null) {
+    return this.intelligence.getFinancialHealthScore(targetDate);
+  }
+
+  getBalanceForecast(daysAhead = 90) {
+    return this.intelligence.getBalanceForecast(daysAhead);
+  }
+
+  getSmartInsights(targetMonthKey = null) {
+    return this.intelligence.getSmartInsights(targetMonthKey);
+  }
+
+  detectAnomalies(monthsBack = 6) {
+    return this.intelligence.detectAnomalies(monthsBack);
+  }
+
+  suggestCategory(description, amount = null) {
+    return this.intelligence.suggestCategory(description, amount);
+  }
+
+  detectRecurringPatterns() {
+    return this.intelligence.detectRecurringPatterns();
+  }
+
+  getCreditCardIntelligence() {
+    return this.intelligence.getCreditCardIntelligence();
+  }
+
+  getGoalsIntelligence() {
+    return this.intelligence.getGoalsIntelligence();
+  }
+
+  getMonthlyCloseout(yearMonth = null) {
+    return this.intelligence.getMonthlyCloseout(yearMonth);
+  }
+
+  convertCandidateToRecurring(candidate) {
+    return this.intelligence.convertCandidateToRecurring(candidate);
+  }
+
+  // --- CLOUD AUTH & SYNC (SUPABASE / LOCAL-FIRST) ---
+  getCloudSession() {
+    return this.cloudAuth.getSession();
+  }
+
+  cloudSignIn(email, password, config) {
+    return this.cloudAuth.signIn(email, password, config);
+  }
+
+  cloudSignUp(email, password, config) {
+    return this.cloudAuth.signUp(email, password, config);
+  }
+
+  cloudSignOut() {
+    return this.cloudAuth.signOut();
+  }
+
+  updateCloudConfig(supabaseUrl, supabaseAnonKey) {
+    return this.cloudAuth.updateConfig(supabaseUrl, supabaseAnonKey);
+  }
+
+  triggerCloudSync() {
+    return this.syncEngine.sync();
+  }
+
+  cloudFullPull() {
+    return this.syncEngine.fullPull();
   }
 }
 

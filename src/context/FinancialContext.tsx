@@ -11,6 +11,8 @@ import {
   CategoryBudget,
   NotificationItem,
   PendingImportSession,
+  CloudSession,
+  SyncResult,
 } from '../types';
 
 export type AppView =
@@ -25,7 +27,8 @@ export type AppView =
   | 'goals'
   | 'reports'
   | 'settings'
-  | 'import';
+  | 'import'
+  | 'intelligence';
 
 interface ToastInfo {
   id: string;
@@ -73,6 +76,20 @@ interface FinancialContextType {
   saveImportSession: (session: PendingImportSession) => void;
   clearImportSession: () => void;
   resumeImportSession: () => void;
+
+  // Navigation with filter
+  filterAccountId: string | null;
+  setFilterAccountId: (id: string | null) => void;
+  navigateToAccountTransactions: (accountId: string) => void;
+
+  // Cloud Auth & Sync (Supabase / Local-First)
+  cloudSession: CloudSession | null;
+  syncStatus: 'synced' | 'offline' | 'local_only' | 'syncing' | 'error';
+  isSyncing: boolean;
+  cloudAuthModalOpen: boolean;
+  setCloudAuthModalOpen: (open: boolean) => void;
+  refreshCloudSession: () => Promise<void>;
+  triggerSync: () => Promise<SyncResult | null>;
 }
 
 const FinancialContext = createContext<FinancialContextType | undefined>(undefined);
@@ -135,6 +152,52 @@ export const FinancialProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const resumeImportSession = useCallback(() => {
     setCurrentView('import');
   }, []);
+
+  // Filtered navigation state
+  const [filterAccountId, setFilterAccountId] = useState<string | null>(null);
+
+  const navigateToAccountTransactions = useCallback((accId: string) => {
+    setFilterAccountId(accId);
+    setCurrentView('transactions');
+  }, []);
+
+  // Cloud Auth & Sync (Supabase / Local-First)
+  const [cloudSession, setCloudSession] = useState<CloudSession | null>(null);
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'offline' | 'local_only' | 'syncing' | 'error'>('local_only');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [cloudAuthModalOpen, setCloudAuthModalOpen] = useState(false);
+
+  const refreshCloudSession = useCallback(async () => {
+    if (!window.electronAPI?.getCloudSession) return;
+    try {
+      const s = await window.electronAPI.getCloudSession();
+      setCloudSession(s);
+      if (s?.userId) {
+        setSyncStatus('synced');
+      } else {
+        setSyncStatus('local_only');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }, []);
+
+  const triggerSync = useCallback(async (): Promise<SyncResult | null> => {
+    if (!window.electronAPI?.triggerCloudSync) return null;
+    setIsSyncing(true);
+    setSyncStatus('syncing');
+    try {
+      const res = await window.electronAPI.triggerCloudSync();
+      setSyncStatus(res.status);
+      await refreshCloudSession();
+      return res;
+    } catch (e) {
+      setSyncStatus('error');
+      return null;
+    } finally {
+      setIsSyncing(false);
+    }
+  }, [refreshCloudSession]);
 
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = Math.random().toString(36).substring(2, 9);
@@ -213,6 +276,9 @@ export const FinancialProvider: React.FC<{ children: React.ReactNode }> = ({ chi
           setIsLocked(true);
         }
         await refreshAll();
+        await refreshCloudSession();
+        // Silent background sync check if user is connected
+        window.electronAPI.triggerCloudSync?.().catch(() => {});
       } catch (e: any) {
         console.error('Init error:', e);
       } finally {
@@ -220,11 +286,13 @@ export const FinancialProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       }
     }
     init();
-  }, [refreshAll]);
+  }, [refreshAll, refreshCloudSession]);
 
   // Global Keyboard Shortcuts (Desktop Productivity)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (isLocked) return;
+
       // Ctrl+N -> New Transaction
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
         e.preventDefault();
@@ -244,7 +312,7 @@ export const FinancialProvider: React.FC<{ children: React.ReactNode }> = ({ chi
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [isLocked]);
 
   const unlockApp = async (pin: string): Promise<boolean> => {
     if (!window.electronAPI) return true;
@@ -320,6 +388,16 @@ export const FinancialProvider: React.FC<{ children: React.ReactNode }> = ({ chi
         saveImportSession,
         clearImportSession,
         resumeImportSession,
+        filterAccountId,
+        setFilterAccountId,
+        navigateToAccountTransactions,
+        cloudSession,
+        syncStatus,
+        isSyncing,
+        cloudAuthModalOpen,
+        setCloudAuthModalOpen,
+        refreshCloudSession,
+        triggerSync,
       }}
     >
       {children}

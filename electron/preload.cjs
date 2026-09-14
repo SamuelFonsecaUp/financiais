@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   reassignStatementAccount: (data) => ipcRenderer.invoke('banking:reassignStatementAccount', data),
   deleteStatementTransactions: (statementId) => ipcRenderer.invoke('banking:deleteStatementTransactions', statementId),
   getSavedStatements: () => ipcRenderer.invoke('banking:getSavedStatements'),
+  saveImportedStatement: (data) => ipcRenderer.invoke('banking:saveStatement', data),
   openStatementsFolder: () => ipcRenderer.invoke('banking:openStatementsFolder'),
   updateStatementStats: (id, data) => ipcRenderer.invoke('banking:updateStatementStats', id, data),
 
@@ -93,9 +94,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
   deleteGoal: (id) => ipcRenderer.invoke('goals:delete', id),
   addFundsToGoal: (id, amount, accountId) => ipcRenderer.invoke('goals:addFunds', id, amount, accountId),
 
-  // Dashboard & Reports
   getDashboardData: () => ipcRenderer.invoke('dashboard:get'),
   getReports: (filters) => ipcRenderer.invoke('reports:get', filters),
+
+  // Financial Intelligence Engine (100% Local & Offline)
+  getIntelligenceOverview: () => ipcRenderer.invoke('intelligence:getOverview'),
+  getFinancialHealthScore: (targetDate) => ipcRenderer.invoke('intelligence:getHealthScore', targetDate),
+  getBalanceForecast: (daysAhead) => ipcRenderer.invoke('intelligence:getForecast', daysAhead),
+  getSmartInsights: (targetMonthKey) => ipcRenderer.invoke('intelligence:getInsights', targetMonthKey),
+  detectAnomalies: (monthsBack) => ipcRenderer.invoke('intelligence:getAnomalies', monthsBack),
+  suggestCategory: (description, amount) => ipcRenderer.invoke('intelligence:suggestCategory', description, amount),
+  detectRecurringPatterns: () => ipcRenderer.invoke('intelligence:detectRecurring'),
+  getCreditCardIntelligence: () => ipcRenderer.invoke('intelligence:getCardAnalysis'),
+  getGoalsIntelligence: () => ipcRenderer.invoke('intelligence:getGoals'),
+  getMonthlyCloseout: (yearMonth) => ipcRenderer.invoke('intelligence:getMonthlyCloseout', yearMonth),
+  convertCandidateToRecurring: (candidate) => ipcRenderer.invoke('intelligence:convertRecurring', candidate),
+
+  // Cloud Auth & Sync (Supabase / Local-First)
+  getCloudSession: () => ipcRenderer.invoke('cloud:getSession'),
+  cloudSignIn: (email, password, config) => ipcRenderer.invoke('cloud:signIn', email, password, config),
+  cloudSignUp: (email, password, config) => ipcRenderer.invoke('cloud:signUp', email, password, config),
+  cloudSignOut: () => ipcRenderer.invoke('cloud:signOut'),
+  updateCloudConfig: (supabaseUrl, supabaseAnonKey) => ipcRenderer.invoke('cloud:updateConfig', supabaseUrl, supabaseAnonKey),
+  triggerCloudSync: () => ipcRenderer.invoke('cloud:sync'),
+  cloudFullPull: () => ipcRenderer.invoke('cloud:fullPull'),
 
   // Backup, Restore & CSV Dialogs
   exportBackupDialog: () => ipcRenderer.invoke('backup:export'),

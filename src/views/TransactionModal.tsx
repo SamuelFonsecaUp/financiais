@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ArrowDownCircle, ArrowUpCircle, ArrowRightLeft, CreditCard as CardIcon, Calendar, FileText, Check, Landmark } from 'lucide-react';
+import { ArrowDownCircle, ArrowUpCircle, ArrowRightLeft, CreditCard as CardIcon, Calendar, FileText, Check, Landmark, FileSpreadsheet, Sparkles } from 'lucide-react';
 import { Modal } from '../components/Modal';
 import { CustomSelect, SelectOption } from '../components/CustomSelect';
 import { useFinancial } from '../context/FinancialContext';
-import { Transaction, TransactionType } from '../types';
+import { Transaction, TransactionType, CategorySuggestion } from '../types';
 import { formatCurrency, getTodayDateString } from '../utils/formatters';
 
 export const TransactionModal: React.FC = () => {
@@ -34,11 +34,31 @@ export const TransactionModal: React.FC = () => {
   const [status, setStatus] = useState<'completed' | 'pending'>('completed');
   const [errorMsg, setErrorMsg] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [updateEntireStatement, setUpdateEntireStatement] = useState(false);
+  const [suggestion, setSuggestion] = useState<CategorySuggestion | null>(null);
+
+  // Auto category suggestion based on local AI text mining
+  useEffect(() => {
+    if (!description || description.trim().length < 3 || editingTransaction) {
+      setSuggestion(null);
+      return;
+    }
+    const timer = setTimeout(async () => {
+      if (window.electronAPI?.suggestCategory) {
+        try {
+          const res = await window.electronAPI.suggestCategory(description);
+          setSuggestion(res);
+        } catch (e) {}
+      }
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [description, editingTransaction]);
 
   // Initialize or reset form when modal opens
   useEffect(() => {
     if (transactionModalOpen) {
       setErrorMsg('');
+      setUpdateEntireStatement(false);
       if (editingTransaction) {
         setType(editingTransaction.type || 'expense');
         setDescription(editingTransaction.description || '');
@@ -161,8 +181,16 @@ export const TransactionModal: React.FC = () => {
       }
 
       if (editingTransaction?.id) {
+        if (updateEntireStatement && editingTransaction.statementId) {
+          payload.updateEntireStatement = true;
+        }
         await window.electronAPI.updateTransaction(editingTransaction.id, payload);
-        showToast('Lançamento atualizado com sucesso!', 'success');
+        showToast(
+          updateEntireStatement && editingTransaction.statementId
+            ? 'Lançamento e todos os itens do extrato atualizados para a nova conta!'
+            : 'Lançamento atualizado com sucesso!',
+          'success'
+        );
       } else {
         await window.electronAPI.createTransaction(payload);
         showToast(
@@ -174,6 +202,7 @@ export const TransactionModal: React.FC = () => {
       }
 
       await refreshAll();
+      window.dispatchEvent(new CustomEvent('finance:transactionsUpdated'));
       closeTransactionModal();
     } catch (err: any) {
       setErrorMsg(err.message || 'Erro ao salvar lançamento.');
@@ -426,11 +455,52 @@ export const TransactionModal: React.FC = () => {
                 </div>
               )}
 
+              {/* Statement Association Indicator & Bulk Option */}
+              {editingTransaction?.statementId && (
+                <div className="p-3.5 bg-emerald-500/10 border border-emerald-500/25 rounded-2xl space-y-2.5">
+                  <div className="flex items-center gap-2 text-xs text-emerald-400 font-medium">
+                    <FileSpreadsheet className="w-4 h-4 shrink-0" />
+                    <span>
+                      Lançamento importado do extrato <strong>{editingTransaction.statementOriginalName || 'bancário'}</strong>
+                    </span>
+                  </div>
+                  <label className="flex items-start gap-2.5 text-xs text-slate-300 cursor-pointer select-none bg-slate-950/40 p-2.5 rounded-xl border border-emerald-500/20 hover:border-emerald-500/40 transition-colors">
+                    <input
+                      type="checkbox"
+                      checked={updateEntireStatement}
+                      onChange={(e) => setUpdateEntireStatement(e.target.checked)}
+                      className="mt-0.5 rounded border-slate-700 bg-slate-900 text-brand-500 focus:ring-brand-500/30 cursor-pointer"
+                    />
+                    <div>
+                      <span className="font-semibold text-white block">
+                        Mudar a conta de todos os lançamentos deste extrato
+                      </span>
+                      <span className="text-[11px] text-slate-400 mt-0.5 block">
+                        Ao marcar, todos os itens que vieram deste mesmo extrato serão movidos para a conta selecionada acima.
+                      </span>
+                    </div>
+                  </label>
+                </div>
+              )}
+
               {/* Category */}
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                  Categoria
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-medium text-slate-400">
+                    Categoria
+                  </label>
+                  {suggestion && (
+                    <button
+                      type="button"
+                      onClick={() => setCategoryId(suggestion.categoryId)}
+                      className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-brand-500/15 hover:bg-brand-500/25 border border-brand-500/30 text-brand-300 rounded-full transition-colors cursor-pointer"
+                      title="Clique para aplicar a categoria sugerida"
+                    >
+                      <Sparkles className="w-2.5 h-2.5 text-brand-400" />
+                      <span>Sugerido: <strong>{suggestion.categoryName}</strong> ({suggestion.confidence}%)</span>
+                    </button>
+                  )}
+                </div>
                 <CustomSelect
                   value={categoryId}
                   onChange={(val) => setCategoryId(val)}

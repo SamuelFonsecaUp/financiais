@@ -16,6 +16,7 @@ import {
   WifiOff,
   Tag,
   FileSpreadsheet,
+  Sparkles,
 } from 'lucide-react';
 import { useFinancial, AppView } from '../context/FinancialContext';
 
@@ -31,6 +32,7 @@ export const Sidebar: React.FC = () => {
 
   const navItems: { id: AppView; label: string; icon: React.FC<{ className?: string }>; badge?: string }[] = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { id: 'intelligence', label: 'Inteligência', icon: Sparkles },
     { id: 'transactions', label: 'Lançamentos', icon: ReceiptText },
     { id: 'import', label: 'Importar Extrato', icon: FileSpreadsheet, badge: pendingImportSession ? 'Pendente' : undefined },
     { id: 'accounts', label: 'Contas', icon: Landmark },

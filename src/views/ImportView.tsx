@@ -30,11 +30,16 @@ import {
   Save,
   Trash2,
   Clock,
-  RotateCcw
+  RotateCcw,
+  Search,
+  Edit2,
+  Plus,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
 import { CustomSelect } from '../components/CustomSelect';
 import { ImportRulesModal } from './ImportRulesModal';
+import { CategoryModal } from './CategoryModal';
 import {
   ImportReconciledItem,
   MerchantGroup,
@@ -42,6 +47,7 @@ import {
   ParsedCsvResult,
   CsvColumnMapping,
   PendingImportSession,
+  Category,
 } from '../types';
 
 interface ErrorBoundaryProps {
@@ -145,12 +151,26 @@ const ImportViewContent: React.FC = () => {
 
   // Review UI state
   const [viewMode, setViewMode] = useState<'grouped' | 'list'>('grouped');
-  const [filterMode, setFilterMode] = useState<'all' | 'pending' | 'categorized' | 'duplicates'>('all');
+  const [filterMode, setFilterMode] = useState<
+    'all' | 'pending' | 'categorized' | 'duplicates' | 'income' | 'expense' | 'transfers'
+  >('all');
+  const [searchQuery, setSearchQuery] = useState('');
   const [saveRulesChecked, setSaveRulesChecked] = useState(true);
   const [rulesModalOpen, setRulesModalOpen] = useState(false);
   const [exitConfirmOpen, setExitConfirmOpen] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Quick Category Creation Modal
+  const [quickCategoryModalOpen, setQuickCategoryModalOpen] = useState(false);
+  const [quickCategoryTarget, setQuickCategoryTarget] = useState<{ type: 'group' | 'item'; id: string } | null>(null);
+
+  // Inline Editing state
+  const [editingItemId, setEditingItemId] = useState<string | null>(null);
+  const [editingItemDesc, setEditingItemDesc] = useState('');
+  const [editingGroupOrigin, setEditingGroupOrigin] = useState<string | null>(null);
+  const [editingGroupDesc, setEditingGroupDesc] = useState('');
 
   const activeAccounts = useMemo(() => (accounts || []).filter(a => a && a.active !== false), [accounts]);
   const activeCards = useMemo(() => (creditCards || []).filter(c => c && c.active !== false), [creditCards]);
@@ -228,48 +248,135 @@ const ImportViewContent: React.FC = () => {
     showToast('Rascunho de importação descartado.', 'info');
   };
 
-  // Open file dialog and start reconciliation
-  const handleSelectFile = async () => {
+  // Process multiple or single files (from dialog or drag-and-drop)
+  const processImportFiles = async (
+    fileList: Array<{ fileName: string; fileType: 'ofx' | 'csv'; content: string; savedStatementId?: string | null; savedPath?: string | null }>
+  ) => {
+    if (!fileList || fileList.length === 0) return;
     setErrorMessage('');
-    if (!window.electronAPI) {
-      setErrorMessage('Ambiente desktop não detectado.');
-      return;
-    }
+    setIsProcessing(true);
 
     try {
-      const res = await window.electronAPI.openBankingFileDialog();
-      if (res.canceled || !res.content) return;
+      const defaultId = destType === 'account' ? activeAccounts[0]?.id : activeCards[0]?.id;
+      let detectedType: 'account' | 'card' = destType;
+      let detectedId: string = destinationId || defaultId || '';
 
-      const fileType = res.fileType === 'ofx' ? 'ofx' : 'csv';
+      // Multi-file batch handling
+      if (fileList.length > 1) {
+        let allParsed: any[] = [];
+
+        for (const f of fileList) {
+          if (f.fileType === 'ofx') {
+            const parsed = await window.electronAPI.parseOFX(f.content);
+            if (parsed && parsed.length > 0) {
+              const meta = (parsed as any).metadata || parsed[0]?.metadata;
+              if (meta && !detectedId) {
+                if (meta.isCreditCard) {
+                  detectedType = 'card';
+                  const matchedCard = activeCards.find(c =>
+                    (meta.bankName && c.name.toLowerCase().includes(meta.bankName.toLowerCase())) ||
+                    (meta.org && c.name.toLowerCase().includes(meta.org.toLowerCase()))
+                  );
+                  if (matchedCard) detectedId = matchedCard.id;
+                } else {
+                  detectedType = 'account';
+                  const matchedAcc = activeAccounts.find(a =>
+                    (meta.bankName && a.name.toLowerCase().includes(meta.bankName.toLowerCase())) ||
+                    (meta.org && a.name.toLowerCase().includes(meta.org.toLowerCase()))
+                  );
+                  if (matchedAcc) detectedId = matchedAcc.id;
+                }
+              }
+              allParsed.push(...parsed);
+            }
+          }
+        }
+
+        if (allParsed.length === 0) {
+          setErrorMessage('Nenhum lançamento válido encontrado nos arquivos selecionados.');
+          setIsProcessing(false);
+          return;
+        }
+
+        const targetId = detectedId || defaultId || '';
+        const combinedFileInfo = {
+          fileName: `${fileList.length} arquivos selecionados`,
+          fileType: 'ofx' as const,
+          content: '',
+        };
+        setFileInfo(combinedFileInfo);
+        setDestType(detectedType);
+        setDestinationId(targetId);
+        showToast(`${fileList.length} arquivos combinados com sucesso (${allParsed.length} lançamentos)!`, 'success');
+
+        await reconcileAndProceed(targetId, allParsed, combinedFileInfo, detectedType);
+        return;
+      }
+
+      // Single file handling
+      const single = fileList[0];
       const newFileInfo = {
-        fileName: res.fileName || 'extrato',
-        fileType,
-        content: res.content,
-        savedStatementId: res.savedStatementId || null,
-        savedPath: res.savedPath || null,
+        fileName: single.fileName || 'extrato',
+        fileType: single.fileType,
+        content: single.content,
+        savedStatementId: single.savedStatementId || null,
+        savedPath: single.savedPath || null,
       };
 
       setFileInfo(newFileInfo);
-      setSavedStatementId(res.savedStatementId || null);
-      setSavedVaultPath(res.savedPath || null);
+      setSavedStatementId(single.savedStatementId || null);
+      setSavedVaultPath(single.savedPath || null);
 
-      const defaultId = destType === 'account' ? activeAccounts[0]?.id : activeCards[0]?.id;
-      const targetId = destinationId || defaultId || '';
-      setDestinationId(targetId);
-
-      setIsProcessing(true);
-
-      if (fileType === 'ofx') {
-        const parsedItems = await window.electronAPI.parseOFX(res.content);
+      if (single.fileType === 'ofx') {
+        const parsedItems = await window.electronAPI.parseOFX(single.content);
         if (!parsedItems || parsedItems.length === 0) {
           setErrorMessage('Nenhum lançamento válido foi encontrado no arquivo OFX.');
           setIsProcessing(false);
           return;
         }
-        await reconcileAndProceed(targetId, parsedItems, newFileInfo);
+
+        // Auto-match bank and account/card from OFX metadata
+        const meta = (parsedItems as any).metadata || parsedItems[0]?.metadata;
+        let notice = '';
+
+        if (meta) {
+          if (meta.isCreditCard) {
+            detectedType = 'card';
+            const matchedCard = activeCards.find(c =>
+              (meta.bankName && c.name.toLowerCase().includes(meta.bankName.toLowerCase())) ||
+              (meta.org && c.name.toLowerCase().includes(meta.org.toLowerCase()))
+            );
+            if (matchedCard) {
+              detectedId = matchedCard.id;
+              notice = `Fatura do cartão "${matchedCard.name}" detectada e selecionada automaticamente!`;
+            } else if (activeCards.length > 0) {
+              detectedId = activeCards[0].id;
+              notice = `Fatura de cartão de crédito identificada no arquivo OFX!`;
+            }
+          } else {
+            detectedType = 'account';
+            const matchedAcc = activeAccounts.find(a =>
+              (meta.bankName && a.name.toLowerCase().includes(meta.bankName.toLowerCase())) ||
+              (meta.org && a.name.toLowerCase().includes(meta.org.toLowerCase()))
+            );
+            if (matchedAcc) {
+              detectedId = matchedAcc.id;
+              notice = `Extrato da conta "${matchedAcc.name}" detectado e selecionado automaticamente!`;
+            }
+          }
+        }
+
+        const targetId = detectedId || defaultId || '';
+        setDestType(detectedType);
+        setDestinationId(targetId);
+        if (notice) {
+          showToast(notice, 'info');
+        }
+
+        await reconcileAndProceed(targetId, parsedItems, newFileInfo, detectedType);
       } else {
         // CSV Parsing
-        const parsed = await window.electronAPI.parseCSV(res.content);
+        const parsed = await window.electronAPI.parseCSV(single.content);
         setCsvParsed(parsed);
         setCustomMapping({
           delimiter: parsed.delimiter,
@@ -285,7 +392,8 @@ const ImportViewContent: React.FC = () => {
           return;
         }
 
-        await reconcileAndProceed(targetId, parsed.items, newFileInfo);
+        const targetId = destinationId || defaultId || '';
+        await reconcileAndProceed(targetId, parsed.items, newFileInfo, destType);
       }
     } catch (err: any) {
       setErrorMessage(err.message || 'Erro ao processar arquivo.');
@@ -294,13 +402,128 @@ const ImportViewContent: React.FC = () => {
     }
   };
 
+  // Open file dialog and start reconciliation
+  const handleSelectFile = async () => {
+    setErrorMessage('');
+    if (!window.electronAPI) {
+      setErrorMessage('Ambiente desktop não detectado.');
+      return;
+    }
+
+    try {
+      const res = await window.electronAPI.openBankingFileDialog();
+      if (res.canceled) return;
+
+      if (res.files && res.files.length > 0) {
+        await processImportFiles(
+          res.files.map(f => ({
+            fileName: f.fileName,
+            fileType: f.fileType === 'ofx' ? 'ofx' : 'csv',
+            content: f.content,
+            savedStatementId: f.savedStatementId || null,
+            savedPath: f.savedPath || null,
+          }))
+        );
+        return;
+      }
+
+      if (res.content) {
+        await processImportFiles([
+          {
+            fileName: res.fileName || 'extrato',
+            fileType: res.fileType === 'ofx' ? 'ofx' : 'csv',
+            content: res.content,
+            savedStatementId: res.savedStatementId || null,
+            savedPath: res.savedPath || null,
+          },
+        ]);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erro ao selecionar arquivos.');
+    }
+  };
+
+  // Drag and Drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+
+    if (isProcessing) return;
+    const droppedFiles = Array.from(e.dataTransfer.files);
+    if (!droppedFiles || droppedFiles.length === 0) return;
+
+    const validFiles = droppedFiles.filter(f => {
+      const n = f.name.toLowerCase();
+      return n.endsWith('.ofx') || n.endsWith('.csv');
+    });
+
+    if (validFiles.length === 0) {
+      showToast('Por favor, arraste arquivos com extensão .OFX ou .CSV.', 'error');
+      return;
+    }
+
+    try {
+      const readList = await Promise.all(
+        validFiles.map(async f => {
+          const content = await f.text();
+          const fileType: 'ofx' | 'csv' = f.name.toLowerCase().endsWith('.ofx') ? 'ofx' : 'csv';
+          let savedStatementId: string | null = null;
+          let savedPath: string | null = null;
+          if (window.electronAPI?.saveImportedStatement) {
+            try {
+              const saved = await window.electronAPI.saveImportedStatement({
+                originalName: f.name,
+                fileType,
+                content,
+              });
+              if (saved) {
+                savedStatementId = saved.id;
+                savedPath = saved.savedPath;
+              }
+            } catch (e) {
+              console.error('Error saving dropped file to statement vault:', e);
+            }
+          }
+          return {
+            fileName: f.name,
+            fileType,
+            content,
+            savedStatementId,
+            savedPath,
+          };
+        })
+      );
+      await processImportFiles(readList);
+    } catch (err: any) {
+      showToast('Falha ao ler arquivos arrastados: ' + err.message, 'error');
+    }
+  };
+
   // Reconcile and transition to review step
-  const reconcileAndProceed = async (targetId: string, rawItems: any[], currentFileInfo = fileInfo) => {
+  const reconcileAndProceed = async (
+    targetId: string,
+    rawItems: any[],
+    currentFileInfo = fileInfo,
+    effectiveDestType = destType
+  ) => {
     if (!window.electronAPI) return;
     try {
       const reconciled = await window.electronAPI.reconcileImport({
         accountId: targetId,
-        isCreditCard: destType === 'card',
+        isCreditCard: effectiveDestType === 'card',
         items: rawItems,
       });
 
@@ -309,9 +532,15 @@ const ImportViewContent: React.FC = () => {
       setStep('review');
 
       if (currentFileInfo) {
+        if (currentFileInfo.savedStatementId) {
+          setSavedStatementId(currentFileInfo.savedStatementId);
+        }
+        if (currentFileInfo.savedPath) {
+          setSavedVaultPath(currentFileInfo.savedPath);
+        }
         saveImportSession({
           fileInfo: currentFileInfo,
-          destType,
+          destType: effectiveDestType,
           destinationId: targetId,
           items: reconciled.items || [],
           groups: reconciled.groups || [],
@@ -385,8 +614,59 @@ const ImportViewContent: React.FC = () => {
     }
   };
 
+  // Quick Category Creation Handler
+  const handleOpenNewCategory = (type: 'group' | 'item', id: string) => {
+    setQuickCategoryTarget({ type, id });
+    setQuickCategoryModalOpen(true);
+  };
+
+  const handleCategoryCreated = (newCat: Category) => {
+    if (!quickCategoryTarget) return;
+    if (quickCategoryTarget.type === 'group') {
+      const origin = quickCategoryTarget.id;
+      setGroups(prev =>
+        prev.map(g =>
+          g.origin === origin
+            ? {
+                ...g,
+                suggestedCategoryId: newCat.id,
+                suggestedCategoryName: newCat.name,
+                items: g.items.map(i => ({ ...i, categoryId: newCat.id, categoryName: newCat.name })),
+              }
+            : g
+        )
+      );
+      setItems(prev =>
+        prev.map(i =>
+          i.origin === origin
+            ? { ...i, categoryId: newCat.id, categoryName: newCat.name }
+            : i
+        )
+      );
+    } else {
+      const itemId = quickCategoryTarget.id;
+      setItems(prev =>
+        prev.map(i => (i.id === itemId ? { ...i, categoryId: newCat.id, categoryName: newCat.name } : i))
+      );
+      setGroups(prev =>
+        prev.map(g => ({
+          ...g,
+          items: g.items.map(i =>
+            i.id === itemId ? { ...i, categoryId: newCat.id, categoryName: newCat.name } : i
+          ),
+        }))
+      );
+    }
+    setQuickCategoryTarget(null);
+    setQuickCategoryModalOpen(false);
+  };
+
   // Bulk Category Assignment to an Origin Group
   const handleGroupCategoryChange = (origin: string, categoryId: string) => {
+    if (categoryId === '__NEW_CATEGORY__') {
+      handleOpenNewCategory('group', origin);
+      return;
+    }
     const cat = (categories || []).find(c => c.id === categoryId);
     const catName = cat ? cat.name : undefined;
 
@@ -414,6 +694,10 @@ const ImportViewContent: React.FC = () => {
 
   // Individual item category change
   const handleItemCategoryChange = (itemId: string, categoryId: string) => {
+    if (categoryId === '__NEW_CATEGORY__') {
+      handleOpenNewCategory('item', itemId);
+      return;
+    }
     const cat = (categories || []).find(c => c.id === categoryId);
     const catName = cat ? cat.name : undefined;
 
@@ -429,6 +713,143 @@ const ImportViewContent: React.FC = () => {
         ),
       }))
     );
+  };
+
+  // Item account/card custom override
+  const handleItemAccountChange = (itemId: string, combinedVal: string) => {
+    let targetAccountId: string | undefined = undefined;
+    let targetType: 'account' | 'card' | undefined = undefined;
+
+    if (combinedVal.startsWith('account:')) {
+      targetType = 'account';
+      targetAccountId = combinedVal.replace('account:', '');
+    } else if (combinedVal.startsWith('card:')) {
+      targetType = 'card';
+      targetAccountId = combinedVal.replace('card:', '');
+    }
+
+    setItems(prev =>
+      prev.map(i =>
+        i.id === itemId
+          ? { ...i, targetAccountId, targetType }
+          : i
+      )
+    );
+    setGroups(prev =>
+      prev.map(g => ({
+        ...g,
+        items: g.items.map(i =>
+          i.id === itemId
+            ? { ...i, targetAccountId, targetType }
+            : i
+        ),
+      }))
+    );
+  };
+
+  // Group account/card override
+  const handleGroupAccountChange = (origin: string, combinedVal: string) => {
+    let targetAccountId: string | undefined = undefined;
+    let targetType: 'account' | 'card' | undefined = undefined;
+
+    if (combinedVal.startsWith('account:')) {
+      targetType = 'account';
+      targetAccountId = combinedVal.replace('account:', '');
+    } else if (combinedVal.startsWith('card:')) {
+      targetType = 'card';
+      targetAccountId = combinedVal.replace('card:', '');
+    }
+
+    setGroups(prev =>
+      prev.map(g =>
+        g.origin === origin
+          ? {
+              ...g,
+              items: g.items.map(i => ({ ...i, targetAccountId, targetType })),
+            }
+          : g
+      )
+    );
+    setItems(prev =>
+      prev.map(i =>
+        i.origin === origin
+          ? { ...i, targetAccountId, targetType }
+          : i
+      )
+    );
+  };
+
+  // Item internal transfer toggle
+  const handleItemTransferToggle = (itemId: string, destinationAccountId: string | null) => {
+    setItems(prev =>
+      prev.map(i => {
+        if (i.id !== itemId) return i;
+        const isTransfer = Boolean(destinationAccountId);
+        return {
+          ...i,
+          destinationAccountId,
+          type: isTransfer ? ('transfer' as const) : ('expense' as const),
+        };
+      })
+    );
+    setGroups(prev =>
+      prev.map(g => ({
+        ...g,
+        items: g.items.map(i => {
+          if (i.id !== itemId) return i;
+          const isTransfer = Boolean(destinationAccountId);
+          return {
+            ...i,
+            destinationAccountId,
+            type: isTransfer ? ('transfer' as const) : ('expense' as const),
+          };
+        }),
+      }))
+    );
+  };
+
+  // Inline Description and Origin Editing
+  const saveItemDescription = (itemId: string, newDesc: string) => {
+    const trimmed = newDesc.trim();
+    if (!trimmed) {
+      setEditingItemId(null);
+      return;
+    }
+    setItems(prev =>
+      prev.map(i => (i.id === itemId ? { ...i, description: trimmed } : i))
+    );
+    setGroups(prev =>
+      prev.map(g => ({
+        ...g,
+        items: g.items.map(i => (i.id === itemId ? { ...i, description: trimmed } : i)),
+      }))
+    );
+    setEditingItemId(null);
+    showToast('Descrição atualizada!', 'info');
+  };
+
+  const saveGroupOrigin = (oldOrigin: string, newOrigin: string) => {
+    const trimmed = newOrigin.trim().toUpperCase();
+    if (!trimmed || trimmed === oldOrigin) {
+      setEditingGroupOrigin(null);
+      return;
+    }
+    setGroups(prev =>
+      prev.map(g =>
+        g.origin === oldOrigin
+          ? {
+              ...g,
+              origin: trimmed,
+              items: g.items.map(i => ({ ...i, origin: trimmed })),
+            }
+          : g
+      )
+    );
+    setItems(prev =>
+      prev.map(i => (i.origin === oldOrigin ? { ...i, origin: trimmed } : i))
+    );
+    setEditingGroupOrigin(null);
+    showToast(`Estabelecimento renomeado para "${trimmed}"!`, 'info');
   };
 
   // Select/Deselect groups and items
@@ -489,13 +910,25 @@ const ImportViewContent: React.FC = () => {
   };
 
   // Metrics calculation
-  const stats: ImportSummaryStats = useMemo(() => {
+  const stats = useMemo(() => {
+    const totalCount = items.length;
+    const categorizedCount = items.filter(i => Boolean(i.categoryId)).length;
+    const pendingCategoryCount = items.filter(i => !i.categoryId).length;
+    const duplicateCount = items.filter(i => i.isDuplicate).length;
+    const incomeCount = items.filter(i => i.type === 'income').length;
+    const expenseCount = items.filter(i => i.type === 'expense').length;
+    const transferCount = items.filter(i => Boolean(i.isPotentialTransfer)).length;
+    const groupsCount = groups.length;
+
     return {
-      totalCount: items.length,
-      categorizedCount: items.filter(i => Boolean(i.categoryId)).length,
-      pendingCategoryCount: items.filter(i => !i.categoryId).length,
-      duplicateCount: items.filter(i => i.isDuplicate).length,
-      groupsCount: groups.length,
+      totalCount,
+      categorizedCount,
+      pendingCategoryCount,
+      duplicateCount,
+      incomeCount,
+      expenseCount,
+      transferCount,
+      groupsCount,
     };
   }, [items, groups]);
 
@@ -503,27 +936,45 @@ const ImportViewContent: React.FC = () => {
   const progressPercent = stats.totalCount > 0 ? Math.round((stats.categorizedCount / stats.totalCount) * 100) : 0;
 
   // Filtered groups & items
-  const filteredGroups = useMemo(() => {
-    if (filterMode === 'all') return groups;
-    if (filterMode === 'pending') {
-      return groups.filter(g => g.items.some(i => !i.categoryId));
-    }
-    if (filterMode === 'categorized') {
-      return groups.filter(g => g.items.every(i => Boolean(i.categoryId)));
-    }
-    if (filterMode === 'duplicates') {
-      return groups.filter(g => g.items.some(i => i.isDuplicate));
-    }
-    return groups;
-  }, [groups, filterMode]);
-
   const filteredItems = useMemo(() => {
-    if (filterMode === 'all') return items;
-    if (filterMode === 'pending') return items.filter(i => !i.categoryId);
-    if (filterMode === 'categorized') return items.filter(i => Boolean(i.categoryId));
-    if (filterMode === 'duplicates') return items.filter(i => i.isDuplicate);
-    return items;
-  }, [items, filterMode]);
+    return items.filter(item => {
+      // 1. Search Query
+      if (searchQuery.trim()) {
+        const q = searchQuery.trim().toLowerCase();
+        const matchesDesc = (item.description || '').toLowerCase().includes(q);
+        const matchesOrig = (item.origin || '').toLowerCase().includes(q);
+        const matchesMemo = (item.memo || '').toLowerCase().includes(q);
+        const matchesCat = (item.categoryName || '').toLowerCase().includes(q);
+        const matchesAmt = (item.amount / 100).toString().includes(q);
+        if (!matchesDesc && !matchesOrig && !matchesMemo && !matchesCat && !matchesAmt) {
+          return false;
+        }
+      }
+
+      // 2. Filter mode
+      if (filterMode === 'pending') return !item.categoryId;
+      if (filterMode === 'categorized') return Boolean(item.categoryId);
+      if (filterMode === 'duplicates') return item.isDuplicate;
+      if (filterMode === 'income') return item.type === 'income';
+      if (filterMode === 'expense') return item.type === 'expense';
+      if (filterMode === 'transfers') return Boolean(item.isPotentialTransfer);
+
+      return true;
+    });
+  }, [items, filterMode, searchQuery]);
+
+  const filteredGroups = useMemo(() => {
+    const itemIds = new Set(filteredItems.map(i => i.id));
+    return groups
+      .map(g => {
+        const matchingItems = g.items.filter(i => itemIds.has(i.id));
+        return {
+          ...g,
+          items: matchingItems,
+        };
+      })
+      .filter(g => g.items.length > 0);
+  }, [groups, filteredItems]);
 
   // Execute batch import
   const handleConfirmImport = async () => {
@@ -599,12 +1050,20 @@ const ImportViewContent: React.FC = () => {
 
   // Category select options
   const categoryOptions = useMemo(() => {
-    return (categories || []).map(c => ({
+    const list = (categories || []).map(c => ({
       value: c.id,
       label: c.name,
       color: c.color,
       badge: c.type === 'expense' ? 'Despesa' : 'Receita',
     }));
+    return [
+      ...list,
+      {
+        value: '__NEW_CATEGORY__',
+        label: '✨ + Criar Nova Categoria...',
+        color: '#10b981',
+      },
+    ];
   }, [categories]);
 
   // Account select options
@@ -632,6 +1091,57 @@ const ImportViewContent: React.FC = () => {
       };
     });
   }, [activeCards]);
+
+  const defaultDestName = useMemo(() => {
+    if (destType === 'card') {
+      return activeCards.find(c => c.id === destinationId)?.name || 'Cartão Padrão';
+    }
+    return activeAccounts.find(a => a.id === destinationId)?.name || 'Conta Padrão';
+  }, [destType, destinationId, activeCards, activeAccounts]);
+
+  // Destination options for individual items/groups
+  const itemDestinationOptions = useMemo(() => {
+    return [
+      {
+        value: '',
+        label: `Padrão do Extrato (${defaultDestName})`,
+        icon: destType === 'card' ? CreditCardIcon : Landmark,
+      },
+      ...activeAccounts.map(a => {
+        const bal = typeof a.currentBalance === 'number' ? a.currentBalance : (a.initialBalance || 0);
+        return {
+          value: `account:${a.id}`,
+          label: `Conta: ${a.name}`,
+          badge: (bal / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
+          icon: Landmark,
+        };
+      }),
+      ...activeCards.map(c => {
+        const lim = typeof c.creditLimit === 'number' ? c.creditLimit : 0;
+        return {
+          value: `card:${c.id}`,
+          label: `Cartão: ${c.name}`,
+          badge: `Limite: ${(lim / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}`,
+          icon: CreditCardIcon,
+        };
+      }),
+    ];
+  }, [activeAccounts, activeCards, defaultDestName, destType]);
+
+  // Account options for internal transfer destination
+  const transferAccountOptions = useMemo(() => {
+    return activeAccounts
+      .filter(a => destType === 'card' || a.id !== destinationId)
+      .map(a => {
+        const bal = typeof a.currentBalance === 'number' ? a.currentBalance : (a.initialBalance || 0);
+        return {
+          value: a.id,
+          label: a.name,
+          badge: (bal / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }),
+          icon: Landmark,
+        };
+      });
+  }, [activeAccounts, destinationId, destType]);
 
   const hasValidDraft = Boolean(
     pendingImportSession &&
@@ -864,16 +1374,32 @@ const ImportViewContent: React.FC = () => {
             </div>
 
             {/* File Picker Drop Target */}
-            <div className="p-8 bg-slate-900/60 border-2 border-dashed border-slate-850 hover:border-brand-500/50 rounded-2xl flex flex-col items-center justify-center text-center gap-4 transition-all group">
-              <div className="w-16 h-16 rounded-2xl bg-brand-500/10 border border-brand-500/20 flex items-center justify-center text-brand-400 group-hover:scale-110 group-hover:bg-brand-500/20 transition-all">
+            <div
+              onDragOver={handleDragOver}
+              onDragEnter={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`p-8 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center text-center gap-4 transition-all group ${
+                isDragging
+                  ? 'bg-brand-500/10 border-brand-500 scale-[1.01] shadow-xl shadow-brand-500/20'
+                  : 'bg-slate-900/60 border-slate-850 hover:border-brand-500/50'
+              }`}
+            >
+              <div
+                className={`w-16 h-16 rounded-2xl flex items-center justify-center transition-all ${
+                  isDragging
+                    ? 'bg-brand-500/30 text-brand-300 scale-110 border border-brand-400'
+                    : 'bg-brand-500/10 border border-brand-500/20 text-brand-400 group-hover:scale-110 group-hover:bg-brand-500/20'
+                }`}
+              >
                 <UploadCloud className="w-8 h-8" />
               </div>
               <div className="space-y-1 max-w-sm">
                 <h3 className="text-base font-bold text-white">
-                  Selecione seu arquivo de extrato
+                  {isDragging ? 'Solte seus arquivos aqui!' : 'Selecione ou arraste seu arquivo de extrato'}
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Compatível com <strong>.OFX</strong> de qualquer banco (Nubank, Itaú, Bradesco, Inter, Santander, BB, etc.) e planilhas <strong>.CSV</strong>.
+                  Compatível com <strong>.OFX</strong> e <strong>.CSV</strong> de qualquer banco. Arraste um ou múltiplos arquivos para importar de uma vez!
                 </p>
               </div>
 
@@ -891,7 +1417,7 @@ const ImportViewContent: React.FC = () => {
                 ) : (
                   <>
                     <FileText className="w-4 h-4" />
-                    <span>Escolher Arquivo no Computador</span>
+                    <span>Escolher Arquivo(s) no Computador</span>
                   </>
                 )}
               </button>
@@ -1181,10 +1707,10 @@ const ImportViewContent: React.FC = () => {
             </div>
 
             {/* Control & Filter Toolbar */}
-            <div className="p-4 bg-slate-900/70 border border-slate-850 rounded-2xl flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-              {/* Left: View Mode Toggle & Filter Tabs */}
+            <div className="p-4 bg-slate-900/70 border border-slate-850 rounded-2xl flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+              {/* Left: View Mode Toggle & Filter Tabs & Search */}
               <div className="flex flex-wrap items-center gap-3">
-                <div className="flex items-center bg-slate-950/70 p-1 rounded-xl border border-slate-800">
+                <div className="flex items-center bg-slate-950/70 p-1 rounded-xl border border-slate-800 shrink-0">
                   <button
                     type="button"
                     onClick={() => setViewMode('grouped')}
@@ -1195,7 +1721,7 @@ const ImportViewContent: React.FC = () => {
                     }`}
                   >
                     <Layers className="w-3.5 h-3.5" />
-                    <span>Por Estabelecimento ({groups.length})</span>
+                    <span>Por Estabelecimento ({filteredGroups.length})</span>
                   </button>
 
                   <button
@@ -1208,16 +1734,42 @@ const ImportViewContent: React.FC = () => {
                     }`}
                   >
                     <List className="w-3.5 h-3.5" />
-                    <span>Lista Completa ({items.length})</span>
+                    <span>Lista Completa ({filteredItems.length})</span>
                   </button>
+                </div>
+
+                {/* Real-time Search Input */}
+                <div className="relative min-w-[220px]">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Buscar no extrato..."
+                    className="w-full bg-slate-950/90 border border-slate-800 rounded-xl pl-8 pr-7 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition-colors"
+                  />
+                  {searchQuery && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-0.5"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
                 </div>
 
                 {/* Filter Pills */}
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {[
-                    { id: 'all', label: 'Todos' },
-                    { id: 'pending', label: `Pendentes (${stats.pendingCategoryCount})` },
+                    { id: 'all', label: `Todos (${stats.totalCount})` },
+                    { id: 'pending', label: `⚠️ Sem Categoria (${stats.pendingCategoryCount})`, highlight: stats.pendingCategoryCount > 0 },
                     { id: 'categorized', label: `Categorizados (${stats.categorizedCount})` },
+                    { id: 'income', label: `Receitas (${stats.incomeCount})` },
+                    { id: 'expense', label: `Despesas (${stats.expenseCount})` },
+                    ...(stats.transferCount > 0
+                      ? [{ id: 'transfers', label: `🔄 Transferências (${stats.transferCount})` }]
+                      : []),
                     { id: 'duplicates', label: `Duplicadas (${stats.duplicateCount})` },
                   ].map(f => (
                     <button
@@ -1225,7 +1777,9 @@ const ImportViewContent: React.FC = () => {
                       onClick={() => setFilterMode(f.id as any)}
                       className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
                         filterMode === f.id
-                          ? 'bg-slate-800 text-white font-semibold border border-slate-700'
+                          ? 'bg-slate-800 text-white font-semibold border border-slate-700 shadow-sm'
+                          : f.highlight
+                          ? 'text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30'
                           : 'text-slate-400 hover:text-slate-200 hover:bg-slate-850/50'
                       }`}
                     >
@@ -1236,7 +1790,7 @@ const ImportViewContent: React.FC = () => {
               </div>
 
               {/* Right: Quick Selection Controls */}
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-2 flex-wrap shrink-0">
                 <button
                   type="button"
                   onClick={toggleSelectAll}
@@ -1293,9 +1847,54 @@ const ImportViewContent: React.FC = () => {
                             />
                             <div>
                               <div className="flex items-center gap-2 flex-wrap">
-                                <span className="text-sm font-bold text-white tracking-wide">
-                                  {group.origin}
-                                </span>
+                                {editingGroupOrigin === group.origin ? (
+                                  <div className="flex items-center gap-1.5" onClick={e => e.stopPropagation()}>
+                                    <input
+                                      type="text"
+                                      value={editingGroupDesc}
+                                      onChange={e => setEditingGroupDesc(e.target.value)}
+                                      onKeyDown={e => {
+                                        if (e.key === 'Enter') saveGroupOrigin(group.origin, editingGroupDesc);
+                                        if (e.key === 'Escape') setEditingGroupOrigin(null);
+                                      }}
+                                      autoFocus
+                                      className="bg-slate-950 border border-brand-500 rounded-lg px-2 py-0.5 text-xs text-white font-bold"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => saveGroupOrigin(group.origin, editingGroupDesc)}
+                                      className="p-1 bg-brand-600 hover:bg-brand-500 text-white rounded transition-colors"
+                                      title="Salvar nome"
+                                    >
+                                      <Check className="w-3 h-3" />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingGroupOrigin(null)}
+                                      className="p-1 bg-slate-800 text-slate-400 hover:text-white rounded transition-colors"
+                                      title="Cancelar"
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <div className="flex items-center gap-1.5 group/edit">
+                                    <span className="text-sm font-bold text-white tracking-wide">
+                                      {group.origin}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setEditingGroupOrigin(group.origin);
+                                        setEditingGroupDesc(group.origin);
+                                      }}
+                                      title="Renomear estabelecimento para todo o grupo"
+                                      className="p-1 text-slate-500 hover:text-brand-400 opacity-60 hover:opacity-100 transition-opacity"
+                                    >
+                                      <Edit2 className="w-3 h-3" />
+                                    </button>
+                                  </div>
+                                )}
                                 <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">
                                   {group.count} {group.count === 1 ? 'transação' : 'transações'}
                                 </span>
@@ -1319,8 +1918,17 @@ const ImportViewContent: React.FC = () => {
                             </div>
                           </div>
 
-                          {/* Group Actions: Bulk Category Selector & Expand */}
-                          <div className="flex items-center gap-3">
+                          {/* Group Actions: Bulk Account & Category Selector & Expand */}
+                          <div className="flex items-center gap-2">
+                            <div className="w-48 hidden lg:block">
+                              <CustomSelect
+                                options={itemDestinationOptions}
+                                value={group.items[0]?.targetAccountId ? `${group.items[0]?.targetType || 'account'}:${group.items[0]?.targetAccountId}` : ''}
+                                onChange={(val) => handleGroupAccountChange(group.origin, val)}
+                                placeholder="Conta do grupo..."
+                              />
+                            </div>
+
                             <div className="w-56">
                               <CustomSelect
                                 options={categoryOptions}
@@ -1330,6 +1938,14 @@ const ImportViewContent: React.FC = () => {
                                 searchable
                               />
                             </div>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenNewCategory('group', group.origin)}
+                              title="Criar nova categoria agora"
+                              className="p-2 text-slate-400 hover:text-emerald-400 bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-emerald-500/40 rounded-xl transition-all shrink-0"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
 
                             <button
                               type="button"
@@ -1383,59 +1999,185 @@ const ImportViewContent: React.FC = () => {
                                       )}
                                     </div>
 
-                                    <div className="w-52">
-                                      <CustomSelect
-                                        options={categoryOptions}
-                                        value={item.categoryId || ''}
-                                        onChange={(val) => handleItemCategoryChange(item.id, val)}
-                                        placeholder="Categoria individual..."
-                                        searchable
-                                      />
-                                    </div>
-                                  </div>
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-[10px] uppercase font-bold text-slate-500 whitespace-nowrap">Conta:</span>
+                                          <div className="w-48">
+                                            <CustomSelect
+                                              options={itemDestinationOptions}
+                                              value={item.targetAccountId ? `${item.targetType || 'account'}:${item.targetAccountId}` : ''}
+                                              onChange={(val) => handleItemAccountChange(item.id, val)}
+                                              placeholder="Destino do extrato..."
+                                            />
+                                          </div>
+                                        </div>
 
-                                  {/* Row 2: FULL TRANSACTION INFORMATION WITH NATURAL LINE BREAKS */}
-                                  <div className="space-y-1.5">
-                                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                                      Informações Originais do Extrato Bancário (Completa):
-                                    </span>
-                                    <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-xl font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words select-text">
-                                      {item.originalDescription || item.description}
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-[10px] uppercase font-bold text-slate-500 whitespace-nowrap">Categoria:</span>
+                                          <div className="w-48">
+                                            <CustomSelect
+                                              options={categoryOptions}
+                                              value={item.categoryId || ''}
+                                              onChange={(val) => handleItemCategoryChange(item.id, val)}
+                                              placeholder="Categoria individual..."
+                                              searchable
+                                            />
+                                          </div>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleOpenNewCategory('item', item.id)}
+                                            title="Criar nova categoria agora"
+                                            className="p-2 text-slate-400 hover:text-emerald-400 bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-emerald-500/40 rounded-xl transition-all shrink-0"
+                                          >
+                                            <Plus className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
+                                      </div>
                                     </div>
-                                  </div>
 
-                                  {/* Row 3: Metadata Tags */}
-                                  <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
-                                    {item.fitId && (
-                                      <span className="px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-400 font-mono border border-slate-750">
-                                        ID Bancário (FITID): {item.fitId}
-                                      </span>
+                                    {/* Potential Internal Transfer Banner / Converter */}
+                                    {(item.isPotentialTransfer || item.destinationAccountId) && (
+                                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-xs">
+                                        <div className="flex items-center gap-2">
+                                          <ArrowRightLeft className="w-4 h-4 text-indigo-400 shrink-0" />
+                                          <span>
+                                            {item.destinationAccountId ? (
+                                              <>
+                                                Configurado como <strong>Transferência Interna</strong> para:{' '}
+                                                <strong className="text-white">
+                                                  {activeAccounts.find(a => a.id === item.destinationAccountId)?.name || 'Conta Selecionada'}
+                                                </strong>
+                                              </>
+                                            ) : (
+                                              <>
+                                                Possível transferência interna detectada com a conta{' '}
+                                                <strong>{item.suggestedTransferAccountName}</strong>
+                                              </>
+                                            )}
+                                          </span>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                                          {item.destinationAccountId ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleItemTransferToggle(item.id, null)}
+                                              className="px-2.5 py-1 text-[11px] font-semibold text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 rounded-lg transition-colors"
+                                            >
+                                              Desfazer Transferência
+                                            </button>
+                                          ) : (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleItemTransferToggle(item.id, item.suggestedTransferAccountId || (transferAccountOptions[0]?.value || null))}
+                                              className="px-3 py-1 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg shadow-sm transition-all"
+                                            >
+                                              🔁 Converter em Transferência
+                                            </button>
+                                          )}
+
+                                          {item.destinationAccountId && (
+                                            <div className="w-48">
+                                              <CustomSelect
+                                                options={transferAccountOptions}
+                                                value={item.destinationAccountId}
+                                                onChange={(val) => handleItemTransferToggle(item.id, val)}
+                                                placeholder="Mudar conta de destino..."
+                                              />
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
                                     )}
-                                    {(item.checkNum || item.refNum) && (
-                                      <span className="px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-400 font-mono border border-slate-750">
-                                        Doc/Cheque: {item.checkNum || item.refNum}
-                                      </span>
-                                    )}
-                                    {item.name && item.name !== item.originalDescription && (
-                                      <span className="px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-300 border border-slate-750">
-                                        Favorecido/Nome: {item.name}
-                                      </span>
-                                    )}
-                                    {item.isDuplicate && (
-                                      <span className="px-2.5 py-0.5 rounded-md bg-rose-500/15 text-rose-300 font-medium border border-rose-500/30 flex items-center gap-1">
-                                        <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
-                                        Possível duplicata (já existe no sistema)
-                                      </span>
-                                    )}
-                                    {item.isAutoCategorized && (
-                                      <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 font-medium border border-emerald-500/30 flex items-center gap-1">
-                                        <Check className="w-3 h-3 text-emerald-400" />
-                                        Auto-categorizado por regra
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
+
+                                   {/* Row 2: Editable Description */}
+                                   <div className="space-y-1.5">
+                                     <div className="flex items-center justify-between gap-2">
+                                       <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                                         Descrição do Lançamento:
+                                       </span>
+                                       {editingItemId !== item.id && (
+                                         <button
+                                           type="button"
+                                           onClick={() => {
+                                             setEditingItemId(item.id);
+                                             setEditingItemDesc(item.description);
+                                           }}
+                                           className="text-[11px] text-slate-500 hover:text-brand-400 flex items-center gap-1 transition-colors"
+                                         >
+                                           <Edit2 className="w-3 h-3" />
+                                           <span>Editar</span>
+                                         </button>
+                                       )}
+                                     </div>
+
+                                     {editingItemId === item.id ? (
+                                       <div className="flex items-center gap-2">
+                                         <input
+                                           type="text"
+                                           value={editingItemDesc}
+                                           onChange={e => setEditingItemDesc(e.target.value)}
+                                           onKeyDown={e => {
+                                             if (e.key === 'Enter') saveItemDescription(item.id, editingItemDesc);
+                                             if (e.key === 'Escape') setEditingItemId(null);
+                                           }}
+                                           autoFocus
+                                           className="flex-1 bg-slate-950 border border-brand-500 rounded-xl px-3 py-2 text-xs text-white"
+                                         />
+                                         <button
+                                           type="button"
+                                           onClick={() => saveItemDescription(item.id, editingItemDesc)}
+                                           className="px-3 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold"
+                                         >
+                                           Salvar
+                                         </button>
+                                         <button
+                                           type="button"
+                                           onClick={() => setEditingItemId(null)}
+                                           className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium"
+                                         >
+                                           Cancelar
+                                         </button>
+                                       </div>
+                                     ) : (
+                                       <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-xl font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words select-text">
+                                         {item.description}
+                                       </div>
+                                     )}
+                                   </div>
+
+                                   {/* Row 3: Metadata Tags */}
+                                   <div className="flex flex-wrap items-center gap-2 pt-1 text-[11px]">
+                                     {item.fitId && (
+                                       <span className="px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-400 font-mono border border-slate-750">
+                                         ID Bancário (FITID): {item.fitId}
+                                       </span>
+                                     )}
+                                     {(item.checkNum || item.refNum) && (
+                                       <span className="px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-400 font-mono border border-slate-750">
+                                         Doc/Cheque: {item.checkNum || item.refNum}
+                                       </span>
+                                     )}
+                                     {item.name && item.name !== item.originalDescription && (
+                                       <span className="px-2 py-0.5 rounded-md bg-slate-800/80 text-slate-300 border border-slate-750">
+                                         Favorecido/Nome: {item.name}
+                                       </span>
+                                     )}
+                                     {item.isDuplicate && (
+                                       <span className="px-2.5 py-0.5 rounded-md bg-rose-500/15 text-rose-300 font-medium border border-rose-500/30 flex items-center gap-1">
+                                         <AlertCircle className="w-3.5 h-3.5 text-rose-400" />
+                                         Possível duplicata (já existe no sistema)
+                                       </span>
+                                     )}
+                                     {item.isAutoCategorized && (
+                                       <span className="px-2.5 py-0.5 rounded-md bg-emerald-500/15 text-emerald-300 font-medium border border-emerald-500/30 flex items-center gap-1">
+                                         <Check className="w-3 h-3 text-emerald-400" />
+                                         Auto-categorizado por regra
+                                       </span>
+                                     )}
+                                   </div>
+                                 </div>
+                               ))}
                             </div>
                           </div>
                         )}
@@ -1485,32 +2227,157 @@ const ImportViewContent: React.FC = () => {
                           )}
                         </div>
 
-                        <div className="flex items-center gap-4">
+                        <div className="flex flex-wrap items-center gap-3">
                           <span className={`text-base font-bold font-mono ${
                             item.type === 'income' ? 'text-emerald-400' : 'text-rose-400'
                           }`}>
                             {item.type === 'income' ? '+' : '-'} {formatCurrency(item.amount)}
                           </span>
-                          <div className="w-56">
-                            <CustomSelect
-                              options={categoryOptions}
-                              value={item.categoryId || ''}
-                              onChange={(val) => handleItemCategoryChange(item.id, val)}
-                              placeholder="Categoria..."
-                              searchable
-                            />
+
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] uppercase font-bold text-slate-500 whitespace-nowrap">Conta:</span>
+                            <div className="w-48">
+                              <CustomSelect
+                                options={itemDestinationOptions}
+                                value={item.targetAccountId ? `${item.targetType || 'account'}:${item.targetAccountId}` : ''}
+                                onChange={(val) => handleItemAccountChange(item.id, val)}
+                                placeholder="Destino do extrato..."
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] uppercase font-bold text-slate-500 whitespace-nowrap">Categoria:</span>
+                            <div className="w-48">
+                              <CustomSelect
+                                options={categoryOptions}
+                                value={item.categoryId || ''}
+                                onChange={(val) => handleItemCategoryChange(item.id, val)}
+                                placeholder="Categoria..."
+                                searchable
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenNewCategory('item', item.id)}
+                              title="Criar nova categoria agora"
+                              className="p-2 text-slate-400 hover:text-emerald-400 bg-slate-900/90 hover:bg-slate-850 border border-slate-800 hover:border-emerald-500/40 rounded-xl transition-all shrink-0"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                            </button>
                           </div>
                         </div>
                       </div>
 
-                      {/* FULL TRANSACTION INFORMATION */}
-                      <div className="space-y-1.5">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
-                          Informações Originais da Transação Bancária (Completa com quebra de linha):
-                        </span>
-                        <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-xl font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words select-text">
-                          {item.originalDescription || item.description}
+                      {/* Potential Internal Transfer Banner / Action */}
+                      {(item.isPotentialTransfer || item.destinationAccountId) && (
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl bg-indigo-500/15 border border-indigo-500/30 text-indigo-300 text-xs">
+                          <div className="flex items-center gap-2">
+                            <ArrowRightLeft className="w-4 h-4 text-indigo-400 shrink-0" />
+                            <span>
+                              {item.destinationAccountId ? (
+                                <>
+                                  Configurado como <strong>Transferência Interna</strong> para:{' '}
+                                  <strong className="text-white">
+                                    {activeAccounts.find(a => a.id === item.destinationAccountId)?.name || 'Conta Selecionada'}
+                                  </strong>
+                                </>
+                              ) : (
+                                <>
+                                  Possível transferência interna detectada com a conta{' '}
+                                  <strong>{item.suggestedTransferAccountName}</strong>
+                                </>
+                              )}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                            {item.destinationAccountId ? (
+                              <button
+                                type="button"
+                                onClick={() => handleItemTransferToggle(item.id, null)}
+                                className="px-2.5 py-1 text-[11px] font-semibold text-rose-300 hover:text-white bg-rose-500/20 hover:bg-rose-500/30 rounded-lg transition-colors"
+                              >
+                                Desfazer Transferência
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleItemTransferToggle(item.id, item.suggestedTransferAccountId || (transferAccountOptions[0]?.value || null))}
+                                className="px-3 py-1 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg shadow-sm transition-all"
+                              >
+                                🔁 Converter em Transferência
+                              </button>
+                            )}
+
+                            {item.destinationAccountId && (
+                              <div className="w-48">
+                                <CustomSelect
+                                  options={transferAccountOptions}
+                                  value={item.destinationAccountId}
+                                  onChange={(val) => handleItemTransferToggle(item.id, val)}
+                                  placeholder="Mudar conta de destino..."
+                                />
+                              </div>
+                            )}
+                          </div>
                         </div>
+                      )}
+
+                      {/* Editable Description */}
+                      <div className="space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 block">
+                            Descrição do Lançamento:
+                          </span>
+                          {editingItemId !== item.id && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingItemId(item.id);
+                                setEditingItemDesc(item.description);
+                              }}
+                              className="text-[11px] text-slate-500 hover:text-brand-400 flex items-center gap-1 transition-colors"
+                            >
+                              <Edit2 className="w-3 h-3" />
+                              <span>Editar</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {editingItemId === item.id ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={editingItemDesc}
+                              onChange={e => setEditingItemDesc(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') saveItemDescription(item.id, editingItemDesc);
+                                if (e.key === 'Escape') setEditingItemId(null);
+                              }}
+                              autoFocus
+                              className="flex-1 bg-slate-950 border border-brand-500 rounded-xl px-3 py-2 text-xs text-white"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => saveItemDescription(item.id, editingItemDesc)}
+                              className="px-3 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold"
+                            >
+                              Salvar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingItemId(null)}
+                              className="px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-medium"
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="p-3 bg-slate-950/80 border border-slate-800/80 rounded-xl font-mono text-xs text-slate-300 leading-relaxed whitespace-pre-wrap break-words select-text">
+                            {item.description}
+                          </div>
+                        )}
                       </div>
 
                       {/* Metadata Chips */}
@@ -1659,6 +2526,18 @@ const ImportViewContent: React.FC = () => {
       <ImportRulesModal
         isOpen={rulesModalOpen}
         onClose={() => setRulesModalOpen(false)}
+      />
+
+      {/* Quick Category Creation Modal */}
+      <CategoryModal
+        isOpen={quickCategoryModalOpen}
+        onClose={() => {
+          setQuickCategoryModalOpen(false);
+          setQuickCategoryTarget(null);
+        }}
+        categoryToEdit={null}
+        defaultType="expense"
+        onSuccess={handleCategoryCreated}
       />
     </div>
   );

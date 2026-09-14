@@ -9,6 +9,7 @@ interface CategoryModalProps {
   onClose: () => void;
   categoryToEdit: Category | null;
   defaultType?: CategoryType;
+  onSuccess?: (created: Category) => void;
 }
 
 const categoryColors = [
@@ -22,6 +23,7 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
   onClose,
   categoryToEdit,
   defaultType = 'expense',
+  onSuccess,
 }) => {
   const { refreshAll, showToast } = useFinancial();
 
@@ -62,12 +64,15 @@ export const CategoryModal: React.FC<CategoryModalProps> = ({
         });
         showToast('Categoria atualizada com sucesso!', 'success');
       } else {
-        await window.electronAPI.createCategory({
+        const created = await window.electronAPI.createCategory({
           name: name.trim(),
           type,
           color,
         });
         showToast('Categoria criada com sucesso!', 'success');
+        if (onSuccess && created) {
+          onSuccess(created);
+        }
       }
 
       await refreshAll();

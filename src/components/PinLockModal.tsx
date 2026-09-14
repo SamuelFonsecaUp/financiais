@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Lock, Delete, KeyRound } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
 
@@ -8,38 +8,71 @@ export const PinLockModal: React.FC = () => {
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  if (!isLocked) return null;
+  const pinRef = useRef(pin);
+  pinRef.current = pin;
+  const loadingRef = useRef(loading);
+  loadingRef.current = loading;
 
-  const handleDigit = (digit: string) => {
-    if (pin.length < 6) {
-      const newPin = pin + digit;
-      setPin(newPin);
+  const handleDigit = useCallback((digit: string) => {
+    if (pinRef.current.length < 8) {
+      setPin(prev => prev + digit);
       setError(false);
     }
-  };
+  }, []);
 
-  const handleDelete = () => {
+  const handleDelete = useCallback(() => {
     setPin(prev => prev.slice(0, -1));
     setError(false);
-  };
+  }, []);
 
-  const handleClear = () => {
+  const handleClear = useCallback(() => {
     setPin('');
     setError(false);
-  };
+  }, []);
 
-  const handleSubmit = async (e?: React.FormEvent) => {
+  const handleSubmit = useCallback(async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!pin || loading) return;
+    const currentPin = pinRef.current;
+    if (!currentPin || loadingRef.current || currentPin.length < 4) return;
 
     setLoading(true);
-    const success = await unlockApp(pin);
+    const success = await unlockApp(currentPin);
     setLoading(false);
     if (!success) {
       setError(true);
       setPin('');
     }
-  };
+  }, [unlockApp]);
+
+  useEffect(() => {
+    if (!isLocked) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Support 0-9 from main keyboard row and numeric keypad
+      if (/^[0-9]$/.test(e.key)) {
+        e.preventDefault();
+        handleDigit(e.key);
+      } else if (e.key === 'Backspace') {
+        e.preventDefault();
+        handleDelete();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        handleSubmit();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        handleClear();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [isLocked, handleDigit, handleDelete, handleSubmit, handleClear]);
+
+  if (!isLocked) return null;
+
+  const dotCount = Math.max(4, pin.length);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090d16] p-4">
@@ -53,7 +86,7 @@ export const PinLockModal: React.FC = () => {
 
         {/* PIN Dots Indicator */}
         <div className="flex items-center gap-3 mb-8">
-          {[0, 1, 2, 3].map((i) => (
+          {Array.from({ length: dotCount }).map((_, i) => (
             <div
               key={i}
               className={`w-3.5 h-3.5 rounded-full transition-all duration-200 ${
