@@ -12,8 +12,8 @@
     "dist": "electron-builder"
   },
   "build": {
-    "appId": "com.meufinanceiro.app",
-    "productName": "Meu Financeiro",
+    "appId": "com.pigo.app",
+    "productName": "Pigo",
     "npmRebuild": false,
     "directories": {
       "output": "release"
@@ -24,6 +24,7 @@
       "package.json"
     ],
     "win": {
+      "icon": "public/assets/pigo-icon.png",
       "target": [
         "nsis",
         "portable"
@@ -34,7 +35,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Meu Financeiro"
+      "shortcutName": "Pigo - Finanças Pessoais"
     }
   },
   "keywords": [],

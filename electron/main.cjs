@@ -37,13 +37,18 @@ function handleIpc(channel, handler) {
 }
 
 function createWindow() {
+  const iconPath = fs.existsSync(path.join(__dirname, '../public/assets/pigo-icon.png'))
+    ? path.join(__dirname, '../public/assets/pigo-icon.png')
+    : path.join(__dirname, '../dist/assets/pigo-icon.png');
+
   mainWindow = new BrowserWindow({
     width: 1300,
     height: 820,
     minWidth: 1060,
     minHeight: 680,
     backgroundColor: '#090d16',
-    title: 'Meu Financeiro',
+    title: 'Pigo - Finanças Pessoais',
+    icon: fs.existsSync(iconPath) ? iconPath : undefined,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,

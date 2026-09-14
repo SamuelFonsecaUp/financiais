@@ -13,6 +13,7 @@ import {
   Shield,
 } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
+import pigoIcon from '../assets/pigo-icon.png';
 
 export const OnboardingView: React.FC = () => {
   const { refreshAll, showToast, refreshCloudSession } = useFinancial();
@@ -149,7 +150,7 @@ export const OnboardingView: React.FC = () => {
         {/* Brand Header */}
         <div className="flex items-center gap-3.5 mb-6">
           <img
-            src="/assets/pigo-icon.png"
+            src={pigoIcon}
             alt="Pigo Logo"
             className="w-12 h-12 rounded-2xl shadow-lg object-contain shrink-0 border border-emerald-500/20"
           />

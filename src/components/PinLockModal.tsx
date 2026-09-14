@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Lock, Delete, KeyRound } from 'lucide-react';
 import { useFinancial } from '../context/FinancialContext';
+import pigoIcon from '../assets/pigo-icon.png';
 
 export const PinLockModal: React.FC = () => {
   const { isLocked, unlockApp } = useFinancial();
@@ -78,7 +79,7 @@ export const PinLockModal: React.FC = () => {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#090d16] p-4">
       <div className="w-full max-w-sm flex flex-col items-center">
         <div className="w-16 h-16 rounded-2xl mb-4 shadow-xl overflow-hidden shrink-0 border border-emerald-500/20">
-          <img src="/assets/pigo-icon.png" alt="Pigo Logo" className="w-full h-full object-cover" />
+          <img src={pigoIcon} alt="Pigo Logo" className="w-full h-full object-cover" />
         </div>
 
         <h2 className="text-xl font-black text-white mb-1 tracking-tight">PIGO Finanças</h2>

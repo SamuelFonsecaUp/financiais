@@ -19,6 +19,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { useFinancial, AppView } from '../context/FinancialContext';
+import pigoIcon from '../assets/pigo-icon.png';
 
 export const Sidebar: React.FC = () => {
   const {
@@ -52,7 +53,7 @@ export const Sidebar: React.FC = () => {
         <div className="p-5 border-b border-slate-900 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <img
-              src="/assets/pigo-icon.png"
+              src={pigoIcon}
               alt="Pigo Logo"
               className="w-10 h-10 rounded-xl shadow-md object-contain shrink-0"
             />
